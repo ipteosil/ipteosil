@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(npm run *)",
+      "PowerShell($r = Invoke-WebRequest -Uri \"http://localhost:5173\" -UseBasicParsing -ErrorAction SilentlyContinue; $r.StatusCode)",
+      "PowerShell(Get-Command *)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(node -e \"const{chromium}=require\\('playwright'\\);\\(async\\(\\)=>{const b=await chromium.launch\\(\\);const p=await b.newPage\\(\\);await p.goto\\('http://localhost:5173'\\);await p.screenshot\\({path:'C:/Users/82102/ipteosil/ss_login.png',fullPage:false}\\);await b.close\\(\\);console.log\\('done'\\);}\\)\\(\\)\" 2>&1)",
+      "PowerShell(npm install *)"
+    ]
+  }
+}
