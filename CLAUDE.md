@@ -76,26 +76,33 @@ checkin_waiting → (임차인 입실 제출) → checkout_waiting
 
 ---
 
+## 완료된 작업
+
+### ✅ 브라우저 뒤로가기 버그 (2026-06-22)
+- `push()` → `history.pushState()` 동시 호출로 브라우저 히스토리 동기화
+- `pop()` → `history.back()` 으로 변경, `popstate` 이벤트로 스택 감소
+- 앱 진입 시 센티널 푸시 + 항상 재푸시 → 루트에서 실수로 앱 밖으로 나가는 것 방지
+- 루트 화면에서 첫 뒤로가기 → "한 번 더 누르면 앱이 종료돼요" 토스트
+- 2초 안에 두 번째 뒤로가기 → `window.close()` (카카오 인앱브라우저 WebView 닫힘)
+- 관련 커밋: `b26e14f`, `ef7a2ec`
+
+---
+
 ## 남은 작업 (우선순위 순)
 
-### 1. 브라우저 뒤로가기 버그 (긴급)
-- **문제**: `push/pop` 스택이 브라우저 히스토리와 연동되지 않음
-- 브라우저 뒤로가기 버튼 → 앱 내 이전 화면이 아닌 이전 사이트로 나가버림
-- **해결 방향**: `useEffect`로 `history.pushState` / `popstate` 이벤트 연동, 또는 React Router 도입
-- 작업 전 반드시 구체적 접근법 먼저 논의
-
-### 2. Supabase DB 연결
+### 1. Supabase DB 연결 (다음 작업)
 - **현재**: 모든 상태가 `useState` in-memory — 새로고침하면 전부 초기화
 - `.env.local`에 `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` 설정 필요
 - Supabase 코드는 `src/lib/supabase.js`에 집중
 - 테이블 설계 논의 후 진행
+- **필요 테이블**: users, properties, contracts, channels, logs, reviews
 
-### 3. PWA 설정
+### 2. PWA 설정
 - `vite-plugin-pwa` 설치, `manifest.json` 한국어 앱 이름
 - 홈 화면 추가 시 아이콘, 스플래시 스크린
 - iOS Safari 지원 메타태그 확인
 
-### 4. 소셜 로그인 실제 연동
+### 3. 소셜 로그인 실제 연동
 - 현재 카카오/네이버 버튼은 UI만 있고 실제로 DEMO 계정으로 연결됨
 - Supabase Auth로 카카오/네이버 OAuth 연동 필요
 
