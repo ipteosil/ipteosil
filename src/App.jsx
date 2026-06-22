@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 
 const C = {
   primary:"#3366FF", primaryLight:"#EEF2FF", primaryText:"#1A3FCC",
@@ -298,9 +298,19 @@ export default function App() {
   const [showReviewPopup, setShowReviewPopup] = useState(false);
   const [showLanding, setShowLanding] = useState(true);
 
-  const push = (v,ctx={}) => setStack(s=>[...s,{v,ctx}]);
-  const pop = () => setStack(s=>s.slice(0,-1));
+  const push = useCallback((v,ctx={}) => {
+    history.pushState(null, '');
+    setStack(s=>[...s,{v,ctx}]);
+  }, []);
+  const pop = useCallback(() => history.back(), []);
   const cur = stack[stack.length-1];
+
+  // 브라우저 뒤로가기 버튼 → 앱 스택과 동기화
+  useEffect(() => {
+    const onPop = () => setStack(s => s.length > 0 ? s.slice(0,-1) : s);
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
 
   const log = (uid,action) => {
     const e={id:genId(),userId:uid,action,time:nowStr()};
