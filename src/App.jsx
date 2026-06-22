@@ -297,6 +297,12 @@ export default function App() {
   const [linkDone, setLinkDone] = useState(null);
   const [showReviewPopup, setShowReviewPopup] = useState(false);
   const [showLanding, setShowLanding] = useState(true);
+  const [exitToast, setExitToast] = useState(false);
+
+  const stackRef = useRef([]);
+  const exitRequestedRef = useRef(false);
+  const exitTimerRef = useRef(null);
+  useEffect(() => { stackRef.current = stack; }, [stack]);
 
   const push = useCallback((v,ctx={}) => {
     history.pushState(null, '');
@@ -305,11 +311,43 @@ export default function App() {
   const pop = useCallback(() => history.back(), []);
   const cur = stack[stack.length-1];
 
-  // 브라우저 뒤로가기 버튼 → 앱 스택과 동기화
   useEffect(() => {
-    const onPop = () => setStack(s => s.length > 0 ? s.slice(0,-1) : s);
+    // 앱 진입 시 센티널 하나 푸시 — 이게 없으면 첫 뒤로가기가 바로 앱 밖으로 나감
+    history.pushState(null, '');
+
+    const onPop = () => {
+      // 항상 즉시 재푸시 → 앱이 의도치 않게 닫히는 걸 막음
+      history.pushState(null, '');
+
+      if (stackRef.current.length > 0) {
+        // 서브 화면이 있으면 한 단계 뒤로
+        setStack(s => s.length > 0 ? s.slice(0,-1) : s);
+        exitRequestedRef.current = false;
+      } else {
+        // 루트 화면(홈/랜딩/로그인)에서 뒤로가기
+        if (exitRequestedRef.current) {
+          // 2초 안에 두 번째 누름 → 종료
+          clearTimeout(exitTimerRef.current);
+          setExitToast(false);
+          exitRequestedRef.current = false;
+          window.close(); // 카카오 인앱브라우저 등에서 WebView 닫힘
+        } else {
+          // 첫 번째 누름 → 토스트 표시
+          exitRequestedRef.current = true;
+          setExitToast(true);
+          exitTimerRef.current = setTimeout(() => {
+            exitRequestedRef.current = false;
+            setExitToast(false);
+          }, 2000);
+        }
+      }
+    };
+
     window.addEventListener('popstate', onPop);
-    return () => window.removeEventListener('popstate', onPop);
+    return () => {
+      window.removeEventListener('popstate', onPop);
+      clearTimeout(exitTimerRef.current);
+    };
   }, []);
 
   const log = (uid,action) => {
@@ -431,6 +469,14 @@ export default function App() {
           ))}
         </div>
       </div>
+      {exitToast && (
+        <div style={{position:"fixed",bottom:76,left:"50%",transform:"translateX(-50%)",
+          background:"rgba(0,0,0,0.75)",color:"#fff",borderRadius:R.full,
+          padding:"10px 22px",fontSize:F.sm,fontWeight:600,
+          whiteSpace:"nowrap",zIndex:200,pointerEvents:"none"}}>
+          한 번 더 누르면 앱이 종료돼요
+        </div>
+      )}
     </div>
   );
 }
