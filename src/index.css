@@ -4,7 +4,12 @@
   padding: 0;
 }
 
+.lp-scroll { scrollbar-width: none; }
+.lp-scroll::-webkit-scrollbar { display: none; }
+
 body {
+  word-break: keep-all;
+  overflow-wrap: break-word;
   margin: 0;
   padding: 0;
   background: #F7F8FA;

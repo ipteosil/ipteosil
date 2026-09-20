@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# 랜딩용 원본 사진 (줄인 사진은 public/landing 에 있음)
+landing-assets
