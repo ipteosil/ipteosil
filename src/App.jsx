@@ -50,6 +50,10 @@ const DEMO = { id:"demo", name:"김임대", email:"demo@test.com", pw:"1234", is
 const SPACES = ["거실","방1","화장실","주방"];
 const DEFAULT_CI_MSG = `안녕하세요, [주소] 임대인입니다 😊\n입실 확인 링크를 보내드려요.\n아래 링크에 접속하셔서 현관 비밀번호와 방 상태를 확인해주세요!`;
 const DEFAULT_CO_MSG = `안녕하세요, [주소] 임대인입니다 😊\n퇴실 확인 링크를 보내드려요.\n아래 링크에 접속하셔서 현관 비밀번호와 보증금 반환 계좌를 입력해주세요!`;
+const fillAddr = (msg, prop) => {
+  const label=[prop.address,prop.dong,prop.ho].filter(Boolean).join(" ");
+  return msg.replace("[주소] ", label?`${label} `:"");
+};
 
 // ── SHARED UI ──────────────────────────────────────
 const Page = ({children}) => <div style={{minHeight:"100vh",background:C.gray50,fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"}}>{children}</div>;
@@ -371,7 +375,11 @@ export default function App() {
     if(co.checkinToken===linkToken) {
       if(co.checkinSubmitted) return <LinkPage icon="✅" title="이미 제출됐어요" sub="입실 확인은 한 번만 가능해요." onBack={()=>setLinkToken(null)}/>;
       return <CheckinForm co={co} prop={prop} onSubmit={d=>{
-        updateDb(s=>({...s,contracts:s.contracts.map(c=>c.id===co.id?{...c,checkinSubmitted:true,checkinData:{...d,time:nowStr(),at:new Date().toISOString()}}:c)}));
+        updateDb(s=>({...s,contracts:s.contracts.map(c=>{
+          if(c.id!==co.id) return c;
+          const p=s.properties.find(x=>x.id===c.propertyId);
+          return {...c,checkinSubmitted:true,checkinData:{...d,time:nowStr(),at:new Date().toISOString()},baseline:{spaces:[...(p?.spaces||[])],refPhotos:{...(p?.refPhotos||{})}}};
+        })}));
         setLinkToken(null); setLinkDone("checkin");
       }}/>;
     } else {
@@ -577,7 +585,7 @@ const lpImg = (name) => `/landing/${name}.jpg`;
 function LpSection({title,sub,bg,children}) {
   return (
     <div style={{padding:"40px 20px",background:bg||C.white}}>
-      <h2 style={{fontSize:22,fontWeight:800,color:C.gray900,lineHeight:1.35,textAlign:"center",marginBottom:sub?10:22}}>{title}</h2>
+      {title && <h2 style={{fontSize:22,fontWeight:800,color:C.gray900,lineHeight:1.35,textAlign:"center",marginBottom:sub?10:22}}>{title}</h2>}
       {sub && <p style={{fontSize:F.sm,color:C.gray600,lineHeight:1.75,textAlign:"center",marginBottom:22}}>{sub}</p>}
       {children}
     </div>
@@ -610,13 +618,9 @@ function LpReportCard() {
         </div>
         <div style={{flex:1,minWidth:0}}>
           <p style={{fontSize:F.xs,color:C.primary,fontWeight:600,lineHeight:1.4,marginBottom:5}}>이사 갈 때 임차인이<br/>이렇게 찍어요</p>
-          <div style={{position:"relative"}}>
-            <img src={lpImg("loft-after")} alt="이사 갈 때 임차인이 찍은 사진" style={{width:"100%",aspectRatio:"4/3",objectFit:"cover",borderRadius:R.sm,display:"block"}}/>
-            <span style={{position:"absolute",left:6,bottom:6,background:C.danger,color:C.white,fontSize:10,fontWeight:700,borderRadius:R.full,padding:"2px 8px"}}>짐이 남아 있어요</span>
-          </div>
+          <img src={lpImg("loft-after")} alt="이사 갈 때 임차인이 찍은 사진" style={{width:"100%",aspectRatio:"4/3",objectFit:"cover",borderRadius:R.sm,display:"block"}}/>
         </div>
       </div>
-      <div style={{background:C.primaryLight,borderRadius:R.sm,padding:"8px 10px",marginTop:10,fontSize:F.xs,fontWeight:600,color:C.primaryText}}>📌 가지 않아도 이 차이가 보여요</div>
     </div>
   );
 }
@@ -634,56 +638,29 @@ function LpFaq({q,a}) {
   );
 }
 
-// 좌우 화살표 · 마우스 끌기 · 점 표시가 있는 옆으로 넘기기
-function LpCarousel({items}) {
-  const ref=useRef(null);
-  const drag=useRef(null);
-  const [idx,setIdx]=useState(0);
-  const last=items.length-1;
-
-  function goTo(i){
-    const el=ref.current; if(!el) return;
-    const max=el.scrollWidth-el.clientWidth;
-    el.scrollTo({left:last>0?(max*Math.max(0,Math.min(last,i)))/last:0,behavior:"smooth"});
-  }
-  function onScroll(){
-    const el=ref.current; if(!el) return;
-    const max=el.scrollWidth-el.clientWidth;
-    setIdx(max>0?Math.round((el.scrollLeft/max)*last):0);
-  }
-  function down(e){ if(e.pointerType!=="mouse") return; drag.current={x:e.clientX,left:ref.current.scrollLeft}; }
-  function move(e){
-    const d=drag.current; if(!d) return;
-    const dx=e.clientX-d.x;
-    if(Math.abs(dx)>3){ ref.current.style.scrollSnapType="none"; ref.current.scrollLeft=d.left-dx; }
-  }
-  function up(){
-    if(!drag.current) return;
-    drag.current=null;
-    ref.current.style.scrollSnapType="x mandatory";
-    goTo(Math.round((ref.current.scrollLeft/Math.max(1,ref.current.scrollWidth-ref.current.clientWidth))*last));
-  }
-  const arrow=(side,disabled,onClick,label)=>(
-    <button onClick={onClick} disabled={disabled} aria-label={label} style={{position:"absolute",top:"38%",[side]:6,width:36,height:36,borderRadius:"50%",background:C.white,border:`1px solid ${C.gray200}`,boxShadow:"0 2px 8px rgba(0,0,0,0.15)",fontSize:20,lineHeight:1,color:C.gray800,cursor:disabled?"default":"pointer",opacity:disabled?0:1,pointerEvents:disabled?"none":"auto",zIndex:2}}>{side==="left"?"‹":"›"}</button>
-  );
+// 사용 방법 한 단계(입주할 때 / 퇴실할 때 / 최종 보고서)
+function LpShot({img,cap}) {
   return (
-    <div style={{position:"relative",margin:"0 -20px"}}>
-      {arrow("left",idx<=0,()=>goTo(idx-1),"이전")}
-      {arrow("right",idx>=last,()=>goTo(idx+1),"다음")}
-      <div ref={ref} className="lp-scroll" onScroll={onScroll} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerLeave={up}
-        style={{display:"flex",gap:12,overflowX:"auto",scrollSnapType:"x mandatory",padding:"4px 20px 8px",WebkitOverflowScrolling:"touch",cursor:"grab"}}>
-        {items.map(s=>(
-          <div key={s.src} style={{flex:"0 0 78%",maxWidth:320,scrollSnapAlign:"center"}}>
-            <img src={lpImg(s.src)} alt={s.cap} draggable={false} loading="lazy" style={{width:"100%",display:"block",borderRadius:R.md,border:`1px solid ${C.gray200}`,boxShadow:"0 6px 18px rgba(0,0,0,0.08)",userSelect:"none"}}/>
-            <p style={{fontSize:F.xs,fontWeight:700,color:C.gray600,textAlign:"center",marginTop:8}}>{s.cap}</p>
+    <div style={{maxWidth:320,margin:"4px auto 16px"}}>
+      <img src={lpImg(img)} alt={cap} loading="lazy" style={{width:"100%",display:"block",borderRadius:R.md,border:`1px solid ${C.gray200}`,boxShadow:"0 6px 18px rgba(0,0,0,0.08)"}}/>
+      {cap && <p style={{fontSize:F.xs,fontWeight:600,color:C.gray600,textAlign:"center",marginTop:8,lineHeight:1.5}}>{cap}</p>}
+    </div>
+  );
+}
+// steps: [{t, img?, cap?}] — 그림은 해당 단계 바로 아래에 붙음
+function LpPhase({icon,title,color,steps}) {
+  return (
+    <div style={{background:C.white,borderRadius:R.lg,padding:"18px 16px 4px",marginBottom:12,border:`1px solid ${C.gray100}`}}>
+      <span style={{display:"inline-block",fontSize:F.sm,fontWeight:800,color:C.white,background:color,borderRadius:R.full,padding:"5px 14px",marginBottom:12}}>{icon} {title}</span>
+      {steps.map((s,i)=>(
+        <div key={i}>
+          <div style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:s.img?10:12}}>
+            <span style={{width:22,height:22,borderRadius:"50%",background:C.gray100,color:C.gray800,fontSize:F.xs,fontWeight:800,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1}}>{i+1}</span>
+            <p style={{fontSize:F.base,color:C.gray800,lineHeight:1.6}}>{s.t}</p>
           </div>
-        ))}
-      </div>
-      <div style={{display:"flex",justifyContent:"center",gap:6,marginTop:4}}>
-        {items.map((s,i)=>(
-          <button key={s.src} onClick={()=>goTo(i)} aria-label={`${i+1}번째 보기`} style={{width:i===idx?18:7,height:7,borderRadius:R.full,border:"none",padding:0,background:i===idx?C.primary:C.gray200,cursor:"pointer",transition:"width 0.2s"}}/>
-        ))}
-      </div>
+          {s.img && <LpShot img={s.img} cap={s.cap}/>}
+        </div>
+      ))}
     </div>
   );
 }
@@ -691,25 +668,19 @@ function LpCarousel({items}) {
 function LandingPage({reviews,onStart}) {
   const worries=[
     "임차인이 나갔는데 멀리 있어서 가볼 수가 없어요",
-    "보증금은 돌려줘야 하는데, 방이 어떤 상태인지 몰라요",
+    "보증금은 돌려줘야 하는데, 청소는 해놓고 나갔는지 모르겠어요",
     "현관 비밀번호는 바꿨는지, 공과금은 정산했는지 알 수가 없어요",
-    "나중에 말하면 “원래 그랬는데요?”라는 답이 돌아와요",
-  ];
-  const steps=[
-    {n:1,title:"링크를 보내요",desc:"입주할 때 공간별 기준 사진을 올려 두고, 카톡이나 문자로 링크만 보내요."},
-    {n:2,title:"임차인이 같은 자리를 찍어요",desc:"내가 정한 공간, 같은 각도로 사진을 찍고, 비밀번호·공과금·반환 계좌도 함께 적어요."},
-    {n:3,title:"확인하고 돌려줘요",desc:"입주 전과 퇴실 후를 나란히 보고, 문제없으면 받아 둔 계좌로 보증금을 돌려주세요."},
   ];
   const perks=[
-    {emoji:"👀",title:"멀리서도 확인해요",desc:"가보지 않아도 퇴실 상태를 사진으로 봐요. 방이 여러 개여도 한 화면에서 어디까지 왔는지 보여요."},
-    {emoji:"✅",title:"빠뜨리고 나갈 수 없어요",desc:"비밀번호, 전기·가스·수도, 반환 계좌를 채워야 제출돼요. 깜빡해서 나중에 쫓아다니는 일이 줄어요."},
-    {emoji:"📐",title:"내가 정한 양식대로 받아요",desc:"공간별로 같은 자리, 같은 각도로만 받아요. 잘 나온 각도만 골라 내는 걸 막아 줘요."},
-    {emoji:"🔗",title:"링크 하나면 끝이에요",desc:"임차인은 앱을 깔 필요가 없어요. 지난 보고서도 저장돼서 나중에 다시 볼 수 있어요."},
+    {emoji:"👀",title:"멀리서도 확인해요",desc:"직접 가보지 않아도 퇴실 상태를 사진으로 봐요"},
+    {emoji:"✅",title:"체크리스트 때문에 빠뜨리지 않아요",desc:"비밀번호, 공과금, 반환 계좌를 채워야 제출돼요"},
+    {emoji:"📐",title:"내가 정한 양식대로 받아요",desc:"꼭 확인해야 하는 공간을 정할 수 있어요"},
+    {emoji:"🔗",title:"링크 하나면 끝이에요",desc:"임차인은 앱을 깔 필요가 없어요"},
   ];
   const targets=["직장 다니면서 임대업 하시는 분","퇴실 때마다 방을 확인하러 다니는 게 부담스러운 분","단기임대·에어비앤비 운영하시는 분","고시원·다가구 관리하시는 분"];
   const faqs=[
-    {q:"임차인이 앱을 설치해야 하나요?",a:"아니요. 링크만 누르면 돼요."},
     {q:"임차인이 사진을 안 찍으면요?",a:"필수 항목이 빠지면 제출이 안 돼요.\n💡 계약할 때 “퇴실 사진 제출 후 보증금을 정산해요”라고 미리 알려 주시면 더 확실해요."},
+    {q:"앱에서 사진을 자동으로 비교해 주나요?",a:"아니요, 비교는 직접 하셔야 해요. 입주 전과 퇴실 후 사진을 나란히 보여 드리니, 먼저 사진으로 확인하고 자세한 건 임차인과 전화로 확인해 보세요."},
     {q:"사진이 법적 증거가 되나요?",a:"분쟁이 생겼을 때 근거 자료로 쓸 수 있어요. 법적 효력을 보장하지는 않아요."},
     {q:"보증금도 앱에서 보내 주나요?",a:"아니요. 반환 계좌를 받아서 보여 드려요. 송금은 직접 해야 해요."},
   ];
@@ -722,70 +693,69 @@ function LandingPage({reviews,onStart}) {
         <p style={{fontSize:F.base,color:"rgba(255,255,255,0.88)",lineHeight:1.6,marginBottom:8}}>이사 나갈 때마다<br/>직접 가서 확인하기 어렵죠?</p>
         <h1 style={{fontSize:30,fontWeight:800,color:C.white,lineHeight:1.35,marginBottom:22}}>이제 <span style={{color:"#FFE08A"}}>사진 비교</span>해 보고<br/>보증금 돌려주세요</h1>
         <LpReportCard/>
-        <p style={{fontSize:F.sm,color:"rgba(255,255,255,0.92)",lineHeight:1.7,margin:"18px 0 22px"}}>임차인이 링크 하나로 사진을 보내면,<br/>입주 전과 나란히 비교되는 보고서가 도착해요.</p>
+        <p style={{display:"inline-block",fontSize:F.xs,fontWeight:700,color:C.white,background:"rgba(255,255,255,0.18)",borderRadius:R.full,padding:"7px 14px",marginTop:14}}>📌 짐이 남아 있다는 걸 사진으로 알 수 있어요</p>
+        <p style={{fontSize:F.sm,color:"rgba(255,255,255,0.92)",lineHeight:1.7,margin:"14px 0 22px"}}>임차인이 링크 하나로 사진을 보내면,<br/>입주 전과 나란히 비교되는 보고서가 도착해요.</p>
         <button onClick={onStart} style={{padding:"16px 40px",background:C.white,color:C.primary,borderRadius:R.full,fontSize:F.base,fontWeight:700,border:"none",cursor:"pointer",boxShadow:"0 4px 18px rgba(0,0,0,0.18)"}}>무료로 시작하기 →</button>
         <p style={{fontSize:F.xs,color:"rgba(255,255,255,0.7)",marginTop:10}}>앱 설치 없음 · 완전 무료</p>
       </div>
 
       {/* 2. 불안 */}
-      <LpSection title="이런 걱정, 해보셨죠?" bg={C.gray50}>
+      <LpSection bg={C.gray50}>
+        <p style={{fontSize:20,fontWeight:800,color:C.gray900,textAlign:"center",lineHeight:1.5,marginBottom:16}}>이미 보증금은 돌려줬는데,<br/>집에 가 보니 이런 상태라면?</p>
+        <div style={{display:"flex",gap:10}}>
+          <LpPhoto src={lpImg("worry")} label=""/>
+          <LpPhoto src={lpImg("room-after")} label=""/>
+        </div>
+        <h2 style={{fontSize:22,fontWeight:800,color:C.gray900,lineHeight:1.35,textAlign:"center",margin:"44px 0 22px"}}>이런 걱정, 해보셨죠?</h2>
         {worries.map(w=>(
           <div key={w} style={{display:"flex",alignItems:"flex-start",gap:10,background:C.white,borderRadius:R.md,padding:"13px 14px",marginBottom:8,border:`1px solid ${C.gray100}`}}>
             <span style={{fontSize:18,lineHeight:1,flexShrink:0,marginTop:1}}>✅</span>
             <span style={{fontSize:F.sm,color:C.gray800,lineHeight:1.6}}>{w}</span>
           </div>
         ))}
-        <div style={{display:"flex",gap:10,marginTop:18}}>
-          <LpPhoto src={lpImg("worry")} label=""/>
-          <LpPhoto src={lpImg("room-after")} label=""/>
-        </div>
-        <p style={{fontSize:F.base,fontWeight:700,color:C.gray900,textAlign:"center",marginTop:12}}>나갔는데 이런 상태라면?</p>
       </LpSection>
 
       {/* 3. 전환 */}
-      <LpSection title="임차인이라면 이런 사진 올릴 수 있을까요?" sub={<>보증금을 돌려받으려면 방 사진을 찍어서 올려야 해요.<br/>사진에 찍힐 방이니까, 임차인은 나가기 전에<br/>자연스럽게 정리하게 돼요.</>}>
+      <LpSection title="임차인이라면 이런 사진 올릴 수 있을까요?" sub={<>보증금을 돌려받으려면 사진을 올려야 해요.<br/>사진을 찍어야 하니까, 임차인은<br/>자연스럽게 정리하게 돼요.</>}>
+        <p style={{fontSize:F.base,fontWeight:700,color:C.gray800,textAlign:"center",marginBottom:14}}>만약 냉장고 사진을 올려 둔다면?</p>
         <div style={{display:"flex",gap:10,maxWidth:340,margin:"0 auto"}}>
           <LpPhoto src={lpImg("fridge-before")} ratio="3/4" tone="good" label="입주 전 ✅ 이렇게 깨끗했어요"/>
-          <LpPhoto src={lpImg("fridge-after")} ratio="3/4" tone="bad" label="퇴실 후 ❌ 이 상태로는 올리기 어려워요"/>
+          <LpPhoto src={lpImg("fridge-after")} ratio="3/4" tone="bad" label="퇴실 후 ❌ 청소 안 된 상태로는 올리기 어렵겠죠?"/>
         </div>
       </LpSection>
 
-      {/* 4. 방법 */}
-      <LpSection title="이렇게 진행돼요" bg={C.gray50}>
-        {steps.map(s=>(
-          <div key={s.n} style={{display:"flex",gap:14,background:C.white,borderRadius:R.lg,padding:"16px",marginBottom:10,border:`1px solid ${C.gray100}`}}>
-            <div style={{width:32,height:32,borderRadius:"50%",background:C.primary,color:C.white,fontSize:F.base,fontWeight:800,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{s.n}</div>
-            <div>
-              <p style={{fontSize:F.base,fontWeight:700,color:C.gray900,marginBottom:4}}>{s.title}</p>
-              <p style={{fontSize:F.sm,color:C.gray600,lineHeight:1.7}}>{s.desc}</p>
-            </div>
-          </div>
-        ))}
-      </LpSection>
-
-      {/* 4-2. 임차인이 채우는 화면 (실제 앱 캡처) */}
-      <LpSection title="임차인은 이렇게 채워서 보내요" sub="비밀번호, 반환 계좌, 전기·가스·수도 정산까지 채워야 제출할 수 있어요.">
-        <LpCarousel items={[
-          {src:"app-fill-1",cap:"① 현관 비밀번호 · 반환 계좌"},
-          {src:"app-fill-2",cap:"② 전기 · 가스 · 수도 정산"},
+      {/* 4. 사용 방법 (사용설명서) */}
+      <LpSection title="이렇게 사용해요" bg={C.gray50}>
+        <LpPhase icon="📥" title="입주할 때" color={C.primary} steps={[
+          {t:"나갈 때 확인하고 싶은 공간의 사진을 올려 두고",img:"app-setup-1",cap:"임대인이 미리 올려 둔 사진이에요. 오른쪽은 임차인이 퇴실할 때 올려요"},
+          {t:"집 비밀번호와 함께 링크를 보내요",img:"app-copy-1",cap:"[메시지 + 링크 복사]를 누르고, 문자나 카톡에 붙여넣기"},
+        ]}/>
+        <LpPhase icon="🚪" title="퇴실할 때" color="#E74C3C" steps={[
+          {t:"퇴실 링크를 보내면"},
+          {t:"임차인은 기존 공간과 같은 자리를 사진 찍어 올려요",img:"app-checkout-1",cap:"입주 전 사진을 보면서 같은 자리를 찍어요"},
+          {t:"공과금과 비밀번호도 적어야 해요"},
+        ]}/>
+        <LpPhase icon="📋" title="최종 보고서" color={C.success} steps={[
+          {t:"최종 보고서를 확인하고, 문제가 없으면",img:"app-report-1",cap:"입주 전과 퇴실 후를 공간별로 나란히 비교해요"},
+          {t:"보증금을 돌려주세요"},
         ]}/>
       </LpSection>
 
       {/* 5. 장점 */}
-      <LpSection title="이런 점이 달라져요" bg={C.gray50}>
+      <LpSection title="이런 점이 달라져요">
         {perks.map(p=>(
-          <div key={p.title} style={{display:"flex",gap:14,padding:"16px",background:C.white,borderRadius:R.lg,marginBottom:10,border:`1px solid ${C.gray100}`}}>
-            <span style={{fontSize:30,flexShrink:0,lineHeight:1}}>{p.emoji}</span>
+          <div key={p.title} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",background:C.gray50,borderRadius:R.lg,marginBottom:10,border:`1px solid ${C.gray100}`}}>
+            <span style={{fontSize:28,flexShrink:0,lineHeight:1}}>{p.emoji}</span>
             <div>
-              <p style={{fontSize:F.base,fontWeight:700,color:C.gray900,marginBottom:4}}>{p.title}</p>
-              <p style={{fontSize:F.sm,color:C.gray600,lineHeight:1.7}}>{p.desc}</p>
+              <p style={{fontSize:F.base,fontWeight:700,color:C.gray900,marginBottom:2}}>{p.title}</p>
+              <p style={{fontSize:F.sm,color:C.gray600,lineHeight:1.6}}>{p.desc}</p>
             </div>
           </div>
         ))}
       </LpSection>
 
       {/* 6. 이런 분께 */}
-      <LpSection title="이런 분께 좋아요">
+      <LpSection title="이런 분께 좋아요" bg={C.gray50}>
         {targets.map(t=>(
           <div key={t} style={{display:"flex",alignItems:"center",gap:10,padding:"12px 4px",borderBottom:`1px solid ${C.gray200}`}}>
             <span style={{color:C.success,fontSize:18,flexShrink:0}}>✔</span>
@@ -796,7 +766,7 @@ function LandingPage({reviews,onStart}) {
 
       {/* 후기 (쌓이면 표시) */}
       {reviews.length>0 && (
-        <LpSection title="실사용 후기" bg={C.gray50}>
+        <LpSection title="실사용 후기">
           {reviews.map((r,i)=>(
             <div key={i} style={{background:C.white,border:`1px solid ${C.gray200}`,borderRadius:R.lg,padding:"16px",marginBottom:10}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
@@ -813,7 +783,7 @@ function LandingPage({reviews,onStart}) {
       )}
 
       {/* 7. 자주 묻는 질문 */}
-      <LpSection title="자주 묻는 질문" bg={reviews.length>0?C.white:C.gray50}>
+      <LpSection title="자주 묻는 질문" bg={reviews.length>0?C.gray50:C.white}>
         <div style={{borderTop:`1px solid ${C.gray200}`}}>
           {faqs.map(f=><LpFaq key={f.q} q={f.q} a={f.a}/>)}
         </div>
@@ -1212,9 +1182,10 @@ function CheckinSetupPage({prop,co,onSaveProp,onSimCheckin,onMarkSent,onBack}) {
   const [refPhotos,setRefPhotos]=useState(prop.refPhotos||{});
   const [editIdx,setEditIdx]=useState(null);
   const [pendingName,setPendingName]=useState("");
-  const [ciMsg,setCiMsg]=useState(prop.checkinMsg||DEFAULT_CI_MSG.replace("[주소]",`${prop.address} ${prop.ho}`));
+  const [ciMsg,setCiMsg]=useState(prop.checkinMsg||fillAddr(DEFAULT_CI_MSG,prop));
   const [copied,setCopied]=useState(false);
   const [saved,setSaved]=useState(false);
+  const hadPhotos=useRef(Object.keys(prop.refPhotos||{}).length>0);
   const fileRefs=useRef({});
 
   function hPhoto(sp,e){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>setRefPhotos(s=>({...s,[sp]:ev.target.result}));r.readAsDataURL(f);}
@@ -1253,7 +1224,8 @@ function CheckinSetupPage({prop,co,onSaveProp,onSimCheckin,onMarkSent,onBack}) {
         </SCard>
 
         <SCard title="📸 현재 방 상태 사진">
-          <p style={{fontSize:F.sm,color:C.gray600,marginBottom:12}}>공간마다 지금 상태 사진을 올려두면 퇴실할 때 나란히 비교할 수 있어요</p>
+          <p style={{fontSize:F.sm,color:C.gray600,marginBottom:hadPhotos.current&&!co.checkinSubmitted?6:12}}>공간마다 지금 상태 사진을 올려두면 퇴실할 때 나란히 비교할 수 있어요</p>
+          {hadPhotos.current&&!co.checkinSubmitted && <p style={{fontSize:F.xs,color:C.primaryText,background:C.primaryLight,borderRadius:R.sm,padding:"8px 10px",marginBottom:12,lineHeight:1.6}}>💡 이전에 올려 둔 사진이에요. 그대로 써도 되고, 바꿔도 돼요</p>}
           {spaces.map((sp,i)=>(
             <div key={i} style={{marginBottom:16}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
@@ -1315,7 +1287,7 @@ function CheckinSetupPage({prop,co,onSaveProp,onSimCheckin,onMarkSent,onBack}) {
 
 // ── CHECKOUT SETUP ─────────────────────────────────
 function CheckoutSetupPage({prop,co,onSaveProp,onSimCheckout,onMarkSent,onBack}) {
-  const [coMsg,setCoMsg]=useState(prop.checkoutMsg||DEFAULT_CO_MSG.replace("[주소]",`${prop.address} ${prop.ho}`));
+  const [coMsg,setCoMsg]=useState(prop.checkoutMsg||fillAddr(DEFAULT_CO_MSG,prop));
   const [copied,setCopied]=useState(false);
   const [saved,setSaved]=useState(false);
 
@@ -1393,6 +1365,7 @@ function AddPropPage({prop,onSave,onBack}) {
 // ── RECORD PAGE ───────────────────────────────────
 function RecordPage({co,prop,onBack,onEndContract}) {
   const ci=co?.checkinData; const cout=co?.checkoutData;
+  const baseSpaces=co?.baseline?.spaces||prop?.spaces||[]; const baseRef=co?.baseline?.refPhotos||prop?.refPhotos||{};
   const [modal,setModal]=useState(null);
   return (
     <Page>
@@ -1415,11 +1388,11 @@ function RecordPage({co,prop,onBack,onEndContract}) {
             <DataRow label="퇴실 비밀번호" value={cout.password||"-"}/>
             {cout.account && <DataRow label="반환 계좌" value={`${cout.account.bank} ${cout.account.number} (${cout.account.name})`}/>}
             <div style={{marginTop:12}}>
-              {(prop?.spaces||[]).map(sp=>(
+              {baseSpaces.map(sp=>(
                 <div key={sp} style={{marginBottom:14}}>
                   <p style={{fontSize:F.sm,fontWeight:600,marginBottom:6}}>{sp}</p>
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                    {[["입주 전",prop?.refPhotos?.[sp],C.gray400],["퇴실 후",cout.photos?.[sp],C.primary]].map(([l,src,col])=>(
+                    {[["입주 전",baseRef[sp],C.gray400],["퇴실 후",cout.photos?.[sp],C.primary]].map(([l,src,col])=>(
                       <div key={l}>
                         <p style={{fontSize:F.xs,color:col,marginBottom:3}}>{l}</p>
                         {src ? <img src={src} onClick={()=>setModal(src)} style={{width:"100%",aspectRatio:"3/4",objectFit:"cover",borderRadius:R.md,cursor:"pointer"}}/>
@@ -1545,7 +1518,7 @@ function CheckoutForm({co,prop,onSubmit}) {
   const fileRefs=useRef({}); const utilRefs=useRef({}); const extraRef=useRef(null);
   const pwRef=useRef(null); const acctRef=useRef(null); const photoSecRef=useRef(null); const utilSecRef=useRef(null);
   const [tried,setTried]=useState(false);
-  const spaces=prop?.spaces||[]; const refPhotos=prop?.refPhotos||{};
+  const spaces=co?.baseline?.spaces||prop?.spaces||[]; const refPhotos=co?.baseline?.refPhotos||prop?.refPhotos||{};
   const missingPhotos=spaces.filter(sp=>refPhotos[sp]&&!photos[sp]);
   const missingUtil=["전기","가스","수도"].filter(k=>!utils[k]?.skip&&!utils[k]?.photo);
 
@@ -1778,7 +1751,7 @@ function ShareTab() {
   const shareUrl=window.location.origin;
   const [kakaoHint,setKakaoHint]=useState(false);
   const shareText="방 상태 기록부터 보증금 정산까지! 임대인의 든든한 파트너 '입퇴실 도우미'를 추천해요 😊";
-  const targets=[{emoji:"🏠",text:"단기임대 운영 중인 분"},{emoji:"🏢",text:"고시원·다가구 관리하시는 분"},{emoji:"⚖️",text:"퇴실 분쟁이 걱정되는 분"},{emoji:"📱",text:"임차인과 연락이 번거로운 분"}];
+  const targets=[{emoji:"💼",text:"직장 다니면서 임대업 하시는 분"},{emoji:"🏠",text:"단기임대 운영 중인 분"},{emoji:"🏢",text:"고시원·다가구 관리하시는 분"},{emoji:"⚖️",text:"퇴실 분쟁이 걱정되는 분"},{emoji:"📱",text:"임차인과 연락이 부담스러운 분"}];
   function doKakao(){
     if(navigator.share){navigator.share({title:"입퇴실 도우미",text:shareText,url:shareUrl}).catch(()=>{});}
     else{navigator.clipboard?.writeText(shareUrl).catch(()=>{});setKakaoHint(true);}

@@ -4,9 +4,6 @@
   padding: 0;
 }
 
-.lp-scroll { scrollbar-width: none; }
-.lp-scroll::-webkit-scrollbar { display: none; }
-
 body {
   word-break: keep-all;
   overflow-wrap: break-word;
