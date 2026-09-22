@@ -8,6 +8,7 @@ export default defineConfig([
   globalIgnores(['dist']),
   {
     files: ['**/*.{js,jsx}'],
+    ignores: ['vite.config.js'],
     extends: [
       js.configs.recommended,
       reactHooks.configs.flat.recommended,
@@ -17,5 +18,10 @@ export default defineConfig([
       globals: globals.browser,
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
+  },
+  {
+    files: ['vite.config.js'],
+    extends: [js.configs.recommended],
+    languageOptions: { globals: globals.node },
   },
 ])

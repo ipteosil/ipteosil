@@ -356,6 +356,36 @@ export default function App() {
   const askConfirm = (message,onOk,opts={}) => setConfirmDlg({message,onOk,...opts});
   const confirmModal = confirmDlg && <ConfirmModal {...confirmDlg} onClose={()=>setConfirmDlg(null)}/>;
 
+  // ── PWA 설치 (홈 화면에 추가) ──
+  const isIOS = /iphone|ipad|ipod/i.test(window.navigator.userAgent) && !window.MSStream;
+  const [deferredInstallPrompt, setDeferredInstallPrompt] = useState(null);
+  const [isStandalone, setIsStandalone] = useState(false);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
+  const [showIosGuide, setShowIosGuide] = useState(false);
+
+  useEffect(() => {
+    const standalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+    setIsStandalone(standalone);
+    if (standalone) return;
+    const dismissed = localStorage.getItem("pwaBannerDismissed") === "1";
+    const onBip = (e) => { e.preventDefault(); setDeferredInstallPrompt(e); if(!dismissed) setShowInstallBanner(true); };
+    window.addEventListener("beforeinstallprompt", onBip);
+    if (isIOS && !dismissed) setShowInstallBanner(true);
+    return () => window.removeEventListener("beforeinstallprompt", onBip);
+  }, []);
+
+  const dismissInstallBanner = () => { setShowInstallBanner(false); localStorage.setItem("pwaBannerDismissed","1"); };
+  const handleInstallClick = async () => {
+    if (deferredInstallPrompt) {
+      deferredInstallPrompt.prompt();
+      await deferredInstallPrompt.userChoice;
+      setDeferredInstallPrompt(null);
+      setShowInstallBanner(false);
+    } else if (isIOS) {
+      setShowIosGuide(true);
+    }
+  };
+
   const ensureFirstRoom = (uid) => updateDb(s=>{
     if(s.properties.some(p=>p.ownerId===uid)) return s;
     const id=genId();
@@ -500,10 +530,14 @@ export default function App() {
           onAddProp={()=>{
             const id=genId();
             updateDb(s=>({...s,properties:[...s.properties,blankProperty(id,user.id,`방 ${myProps.length+1}`)],contracts:[...s.contracts,blankContract(id)]}));
-          }}/>}
+          }}
+          showInstallBanner={showInstallBanner}
+          onInstallClick={handleInstallClick}
+          onDismissInstallBanner={dismissInstallBanner}/>}
         {tab==="channel" && <ChannelTab items={db.channels} isAdmin={user.isAdmin} onEdit={item=>push("channelEdit",{item})} onAdd={type=>push("channelEdit",{item:{type,title:"",body:"",url:"",date:new Date().toLocaleDateString("ko-KR")}})}/>}
         {tab==="share" && <ShareTab/>}
-        {tab==="settings" && <SettingsTab user={user} contactEmail={db.contactEmail} onLogout={()=>{setUser(null);setStack([]);setTab("home");setShowLanding(false);}} onUpdateEmail={e=>upDb({contactEmail:e})}/>}
+        {tab==="settings" && <SettingsTab user={user} contactEmail={db.contactEmail} onLogout={()=>{setUser(null);setStack([]);setTab("home");setShowLanding(false);}} onUpdateEmail={e=>upDb({contactEmail:e})}
+          canInstallPwa={!isStandalone} onInstallClick={handleInstallClick}/>}
         {tab==="admin" && user.isAdmin && <AdminTab db={db} onUserClick={u=>push("adminUser",{u})} onToggleReviewFeatured={id=>updateDb(s=>({...s,reviews:(s.reviews||[]).map(r=>r.id===id?{...r,featured:!r.featured}:r)}))}/>}
       </div>
       <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,background:C.white,borderTop:`1.5px solid ${C.gray200}`,zIndex:100,boxSizing:"border-box"}}>
@@ -525,6 +559,7 @@ export default function App() {
         </div>
       )}
       {confirmModal}
+      {showIosGuide && <IosInstallModal onClose={()=>setShowIosGuide(false)}/>}
     </div>
   );
 }
@@ -539,6 +574,39 @@ function ConfirmModal({message,okLabel="확인",danger,okOnly,onOk,onClose}) {
           {!okOnly && <button onClick={onClose} style={{flex:1,padding:"13px",background:C.gray100,borderRadius:R.md,fontSize:F.base,fontWeight:600,color:C.gray600,border:"none",cursor:"pointer"}}>취소</button>}
           <button onClick={()=>{onClose();onOk?.();}} style={{flex:1,padding:"13px",background:danger?C.danger:C.primary,borderRadius:R.md,fontSize:F.base,fontWeight:700,color:C.white,border:"none",cursor:"pointer"}}>{okLabel}</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── PWA 설치 안내 (iOS) ────────────────────────────
+// 사파리 실제 공유 버튼 아이콘 (SF Symbol "square.and.arrow.up") — 이모지로는 실물과 달라 직접 그림
+const ShareIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.primary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{verticalAlign:"-4px",margin:"0 2px"}}>
+    <path d="M5 10 V18.5 A2 2 0 0 0 7 20.5 H17 A2 2 0 0 0 19 18.5 V10"/>
+    <line x1="12" y1="3.5" x2="12" y2="14.5"/>
+    <path d="M8.2 7 L12 3.2 L15.8 7"/>
+  </svg>
+);
+
+function IosInstallModal({onClose}) {
+  const steps = [
+    ["1", <>화면 아래 공유 버튼(<ShareIcon/>)을 눌러주세요</>],
+    ["2", '"홈 화면에 추가"를 찾아 눌러주세요'],
+    ["3", '오른쪽 위 "추가"를 누르면 끝!\n다음부턴 홈 화면 아이콘으로 바로 열려요'],
+  ];
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:700,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:R.lg,padding:"24px 20px 16px",maxWidth:340,width:"100%",boxShadow:"0 20px 60px rgba(0,0,0,0.2)"}}>
+        <p style={{fontSize:32,textAlign:"center",marginBottom:8}}>📲</p>
+        <p style={{fontSize:F.lg,fontWeight:700,color:C.gray900,textAlign:"center",marginBottom:20}}>아이폰에 설치하기</p>
+        {steps.map(([n,text])=>(
+          <div key={n} style={{display:"flex",gap:12,marginBottom:16}}>
+            <div style={{width:24,height:24,borderRadius:R.full,background:C.primaryLight,color:C.primaryText,fontSize:F.sm,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{n}</div>
+            <p style={{fontSize:F.base,color:C.gray800,lineHeight:1.6,whiteSpace:"pre-line"}}>{text}</p>
+          </div>
+        ))}
+        <PrimaryBtn label="확인했어요" onClick={onClose} style={{marginTop:4}}/>
       </div>
     </div>
   );
@@ -925,7 +993,7 @@ function RoomStatusRow({emoji,label,status,statusColor,locked,lockedText,onClick
 
 // ── HOME TAB ──────────────────────────────────────
 const REORDER_STEP = 64; // 순서 편집 카드 높이(56) + 간격(8)
-function HomeTab({user,props,contracts,onRenameProp,onReorderProps,onEditProp,onStartNewTenant,onDeleteProp,onOpenMemo,onOpenCheckin,onOpenCheckout,onViewRecord,onOpenPast,onAddProp}) {
+function HomeTab({user,props,contracts,onRenameProp,onReorderProps,onEditProp,onStartNewTenant,onDeleteProp,onOpenMemo,onOpenCheckin,onOpenCheckout,onViewRecord,onOpenPast,onAddProp,showInstallBanner,onInstallClick,onDismissInstallBanner}) {
   const [menuFor,setMenuFor]=useState(null);
   const menuProp=props.find(p=>p.id===menuFor);
   const [reorder,setReorder]=useState(false);
@@ -969,6 +1037,19 @@ function HomeTab({user,props,contracts,onRenameProp,onReorderProps,onEditProp,on
         <h2 style={{fontSize:F.xl,fontWeight:700,color:C.gray900,marginBottom:4}}>안녕하세요, {user.name}님 👋</h2>
         <p style={{fontSize:F.sm,color:C.gray600}}>오늘도 편안한 임대 되세요</p>
       </div>
+      {showInstallBanner && (
+        <div style={{background:C.primaryLight,border:`1px solid ${C.primary}30`,borderRadius:R.lg,padding:"14px 16px",marginBottom:20,display:"flex",alignItems:"center",gap:12}}>
+          <span style={{fontSize:26,flexShrink:0}}>📲</span>
+          <div style={{flex:1}}>
+            <p style={{fontSize:F.sm,fontWeight:700,color:C.primaryText,marginBottom:2}}>앱처럼 설치하고 더 빠르게 써보세요</p>
+            <p style={{fontSize:F.xs,color:C.primaryText,marginBottom:10}}>매번 주소 검색 안 해도, 홈 화면 아이콘 눌러서 바로 열려요</p>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={onInstallClick} style={{padding:"8px 14px",background:C.primary,color:C.white,borderRadius:R.md,fontSize:F.xs,fontWeight:700,border:"none",cursor:"pointer"}}>홈 화면에 추가</button>
+              <button onClick={onDismissInstallBanner} style={{padding:"8px 14px",background:"none",color:C.primaryText,borderRadius:R.md,fontSize:F.xs,fontWeight:600,border:"none",cursor:"pointer"}}>나중에</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:24}}>
         <StatCard label="입실 확인 대기" value={waitCheckin} emoji="🔑" color={waitCheckin>0?C.warning:C.gray400}/>
         <StatCard label="퇴실 제출 대기" value={waitCheckout} emoji="🚪" color={waitCheckout>0?C.warning:C.gray400}/>
@@ -1786,7 +1867,7 @@ function ShareTab() {
 }
 
 // ── SETTINGS ──────────────────────────────────────
-function SettingsTab({user,contactEmail,onLogout,onUpdateEmail}) {
+function SettingsTab({user,contactEmail,onLogout,onUpdateEmail,canInstallPwa,onInstallClick}) {
   const [notifs,setNotifs]=useState({expire:true,checkout:true,checkin:true});
   const [email,setEmail]=useState(contactEmail||"");
   const [editEmail,setEditEmail]=useState(false);
@@ -1801,6 +1882,14 @@ function SettingsTab({user,contactEmail,onLogout,onUpdateEmail}) {
         <DataRow label="이메일" value={user.email}/>
         <DataRow label="가입 방법" value={user.loginMethod||"이메일"}/>
       </SCard>
+      {canInstallPwa && (
+        <SCard title="앱 설정">
+          <div onClick={onInstallClick} style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}}>
+            <div><p style={{fontSize:F.base,fontWeight:500}}>홈 화면에 추가</p><p style={{fontSize:F.xs,color:C.gray400,marginTop:2}}>앱처럼 아이콘 눌러 바로 실행돼요</p></div>
+            <span style={{color:C.gray400,fontSize:18}}>›</span>
+          </div>
+        </SCard>
+      )}
       <SCard title="알림 설정">
         <p style={{fontSize:F.sm,color:C.gray600,marginBottom:12}}>카카오 알림톡으로 알려드려요 (추후 지원 예정)</p>
         {[["expire","계약 만료 알림","계약 종료일이 가까워지면 알려드려요"],["checkout","퇴실 사진 알림","손님이 퇴실 사진을 올리면 알려드려요"],["checkin","입실 확인 알림","손님이 입실 확인을 완료하면 알려드려요"]].map(([k,l,sub])=>(
