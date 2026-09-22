@@ -362,6 +362,7 @@ export default function App() {
   const [isStandalone, setIsStandalone] = useState(false);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [showIosGuide, setShowIosGuide] = useState(false);
+  const [showAndroidGuide, setShowAndroidGuide] = useState(false);
 
   useEffect(() => {
     const standalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
@@ -383,6 +384,8 @@ export default function App() {
       setShowInstallBanner(false);
     } else if (isIOS) {
       setShowIosGuide(true);
+    } else {
+      setShowAndroidGuide(true);
     }
   };
 
@@ -559,7 +562,8 @@ export default function App() {
         </div>
       )}
       {confirmModal}
-      {showIosGuide && <IosInstallModal onClose={()=>setShowIosGuide(false)}/>}
+      {showIosGuide && <InstallGuideModal title="아이폰에 설치하기" steps={IOS_INSTALL_STEPS} onClose={()=>setShowIosGuide(false)}/>}
+      {showAndroidGuide && <InstallGuideModal title="안드로이드에 설치하기" steps={ANDROID_INSTALL_STEPS} onClose={()=>setShowAndroidGuide(false)}/>}
     </div>
   );
 }
@@ -589,17 +593,12 @@ const ShareIcon = () => (
   </svg>
 );
 
-function IosInstallModal({onClose}) {
-  const steps = [
-    ["1", <>화면 아래 공유 버튼(<ShareIcon/>)을 눌러주세요</>],
-    ["2", '"홈 화면에 추가"를 찾아 눌러주세요'],
-    ["3", '오른쪽 위 "추가"를 누르면 끝!\n다음부턴 홈 화면 아이콘으로 바로 열려요'],
-  ];
+function InstallGuideModal({title,steps,onClose}) {
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:700,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
       <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:R.lg,padding:"24px 20px 16px",maxWidth:340,width:"100%",boxShadow:"0 20px 60px rgba(0,0,0,0.2)"}}>
         <p style={{fontSize:32,textAlign:"center",marginBottom:8}}>📲</p>
-        <p style={{fontSize:F.lg,fontWeight:700,color:C.gray900,textAlign:"center",marginBottom:20}}>아이폰에 설치하기</p>
+        <p style={{fontSize:F.lg,fontWeight:700,color:C.gray900,textAlign:"center",marginBottom:20}}>{title}</p>
         {steps.map(([n,text])=>(
           <div key={n} style={{display:"flex",gap:12,marginBottom:16}}>
             <div style={{width:24,height:24,borderRadius:R.full,background:C.primaryLight,color:C.primaryText,fontSize:F.sm,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{n}</div>
@@ -611,6 +610,16 @@ function IosInstallModal({onClose}) {
     </div>
   );
 }
+const IOS_INSTALL_STEPS = [
+  ["1", <>화면 아래 공유 버튼(<ShareIcon/>)을 눌러주세요</>],
+  ["2", '"홈 화면에 추가"를 찾아 눌러주세요'],
+  ["3", '오른쪽 위 "추가"를 누르면 끝!\n다음부턴 홈 화면 아이콘으로 바로 열려요'],
+];
+const ANDROID_INSTALL_STEPS = [
+  ["1", '오른쪽 위 점 3개(⋮) 메뉴를 눌러주세요'],
+  ["2", '"앱 설치" 또는 "홈 화면에 추가"를 찾아 눌러주세요'],
+  ["3", '"설치"를 누르면 끝!\n다음부턴 홈 화면 아이콘으로 바로 열려요'],
+];
 
 // ── REVIEW MODAL ──────────────────────────────────
 function ReviewModal({onSubmit,onClose}) {
