@@ -358,11 +358,14 @@ export default function App() {
 
   // ── PWA 설치 (홈 화면에 추가) ──
   const isIOS = /iphone|ipad|ipod/i.test(window.navigator.userAgent) && !window.MSStream;
+  // 카카오톡 인앱 브라우저는 자체 웹뷰라 홈 화면 추가 기능이 없음 — 기본 브라우저로 먼저 나가야 함
+  const isKakaoInApp = /KAKAOTALK/i.test(window.navigator.userAgent);
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState(null);
   const [isStandalone, setIsStandalone] = useState(false);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [showIosGuide, setShowIosGuide] = useState(false);
   const [showAndroidGuide, setShowAndroidGuide] = useState(false);
+  const [showKakaoGuide, setShowKakaoGuide] = useState(false);
 
   useEffect(() => {
     const standalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
@@ -377,7 +380,9 @@ export default function App() {
 
   const dismissInstallBanner = () => { setShowInstallBanner(false); localStorage.setItem("pwaBannerDismissed","1"); };
   const handleInstallClick = async () => {
-    if (deferredInstallPrompt) {
+    if (isKakaoInApp) {
+      setShowKakaoGuide(true);
+    } else if (deferredInstallPrompt) {
       deferredInstallPrompt.prompt();
       await deferredInstallPrompt.userChoice;
       setDeferredInstallPrompt(null);
@@ -564,6 +569,7 @@ export default function App() {
       {confirmModal}
       {showIosGuide && <InstallGuideModal title="아이폰에 설치하기" steps={IOS_INSTALL_STEPS} onClose={()=>setShowIosGuide(false)}/>}
       {showAndroidGuide && <InstallGuideModal title="안드로이드에 설치하기" steps={ANDROID_INSTALL_STEPS} onClose={()=>setShowAndroidGuide(false)}/>}
+      {showKakaoGuide && <InstallGuideModal title="다른 브라우저에서 설치하기" steps={KAKAO_ESCAPE_STEPS} onClose={()=>setShowKakaoGuide(false)}/>}
     </div>
   );
 }
@@ -619,6 +625,11 @@ const ANDROID_INSTALL_STEPS = [
   ["1", '오른쪽 위 점 3개(⋮) 메뉴를 눌러주세요'],
   ["2", '"앱 설치" 또는 "홈 화면에 추가"를 찾아 눌러주세요'],
   ["3", '"설치"를 누르면 끝!\n다음부턴 홈 화면 아이콘으로 바로 열려요'],
+];
+const KAKAO_ESCAPE_STEPS = [
+  ["1", '카카오톡 브라우저 안에서는 설치가 안 돼요.\n오른쪽 아래(또는 위) \'⋯\' 메뉴를 눌러주세요'],
+  ["2", '"다른 브라우저로 열기"를 찾아 눌러주세요'],
+  ["3", '열린 브라우저(크롬/사파리)에서\n설정 → "홈 화면에 추가"를 다시 눌러주세요'],
 ];
 
 // ── REVIEW MODAL ──────────────────────────────────
