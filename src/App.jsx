@@ -1851,7 +1851,7 @@ function ShareTab() {
   const [copied,setCopied]=useState(false);
   const shareUrl=window.location.origin;
   const [kakaoHint,setKakaoHint]=useState(false);
-  const shareText="방 상태 기록부터 보증금 정산까지! 임대인의 든든한 파트너 '입퇴실 도우미'를 추천해요 😊";
+  const shareText="퇴실할 때마다 직접 가서 확인하기 어려우셨죠? 사진 비교로 방 상태 확인하고, 보증금은 마음 편히 돌려주세요 😊";
   const targets=[{emoji:"💼",text:"직장 다니면서 임대업 하시는 분"},{emoji:"🏠",text:"단기임대 운영 중인 분"},{emoji:"🏢",text:"고시원·다가구 관리하시는 분"},{emoji:"⚖️",text:"퇴실 분쟁이 걱정되는 분"},{emoji:"📱",text:"임차인과 연락이 부담스러운 분"}];
   function doKakao(){
     if(navigator.share){navigator.share({title:"입퇴실 도우미",text:shareText,url:shareUrl}).catch(()=>{});}
