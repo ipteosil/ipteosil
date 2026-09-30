@@ -38,7 +38,7 @@
 ### 기술 스택
 - React 19 + Vite 8, 단일 파일 `src/App.jsx` (약 1980줄)
 - 라우팅: React Router 없음. 자체 `push(view, ctx)` / `pop()` 스택 사용 (브라우저 히스토리와 동기화됨)
-- 데이터: 전부 `useState` in-memory (새로고침하면 날아감 — Supabase 미연결, **다음 최우선 작업**)
+- 데이터: 인증/방/계약은 Supabase 연동 완료(새로고침해도 유지). `channels`/`logs`/`reviews`는 아직 `useState` in-memory
 - 스타일: 100% inline style (CSS 파일은 `index.css`에 리셋 + 랜딩 줄바꿈 규칙만)
 - 배포: Vercel — https://ipteosil.vercel.app (GitHub `main` 브랜치 push 시 자동 배포, 약 20~30초 소요)
 - 랜딩용 사진: `public/landing/` (실제 앱 캡처 + 사용자 제공 방 사진, 가벼운 jpg로 리사이즈됨). 원본은 `landing-assets/`에 있고 `.gitignore` 처리되어 저장소에는 올라가지 않음
@@ -108,6 +108,26 @@ checkinSubmitted=false, checkoutSubmitted=false  (블랭크 계약, 링크는 �
 
 ## 완료된 작업 (최근 순)
 
+### ✅ Supabase 연동 — 로그인 + 방/계약 DB 저장 (2026-09-30)
+- Supabase 프로젝트 생성, `src/lib/supabase.js` 클라이언트 연결, `.env.local` 설정 완료
+- **인증**: 데모 로그인(`DEMO` 계정) 완전 제거 → Supabase Auth(이메일/비밀번호) 실연동. 새로고침해도 로그인 유지. 회원가입 시 `profiles` 테이블에 이름/휴대폰/동의시각 자동 저장(트리거)
+  - 카카오/네이버 버튼은 UI만 유지, 누르면 "곧 지원 예정" 안내(아직 실연동 아님 — 남은 작업 4번 참고)
+  - 개발 모드에서만 보이는 원클릭 로그인 버튼 추가(`import.meta.env.DEV` 가드) — 관리자/테스트 임대인 계정 전환용, 배포 빌드에는 포함 안 됨
+- **DB 스키마**: `supabase/schema.sql` + `supabase/migrations/`에 SQL 보관. 테이블 6개(`profiles, properties, contracts, channels, logs, reviews`) 생성, 전부 RLS 적용
+  - 세입자는 로그인 없이 `?token=...` 링크로 접근 — RLS로는 불가능해서 `get_contract_by_token`/`submit_checkin`/`submit_checkout` 세 개의 SECURITY DEFINER 함수로 토큰 검증 후 처리 (익명 role에 EXECUTE 권한만 부여, 테이블 직접 접근은 불가)
+  - `properties`/`contracts`는 임대인 소유 확인 후 CRUD, `channels`는 전체 공개 읽기 + 관리자만 쓰기, `reviews`는 featured만 비로그인 공개
+- **방/계약 데이터**: `useState` in-memory → Supabase 실시간 저장으로 전환 완료. 로그인 시 `loadMyData()`가 내 방/계약을 불러오고(없으면 "방 1" 자동 생성), 방 추가/이름수정/순서변경/삭제, 계약 메모/입실·퇴실 설정/링크 발송기록/계약마무리/새입주자 등 모든 수정 지점에서 로컬 상태 갱신과 동시에 Supabase에 반영
+  - 방/계약 `id`는 `genId()`(랜덤 문자열) 대신 `crypto.randomUUID()` 사용(DB `uuid` 컬럼과 맞춤)
+  - 임차인이 실제 링크로 입실/퇴실 제출 → RPC로 DB에 즉시 저장 → 임대인 쪽은 제출 직후 `loadMyData()` 재호출로 화면 갱신 (링크 테스트 버튼 포함 전체 플로우 브라우저로 검증 완료)
+- **버그 발견·수정**: "새 입주자 시작하기"에서 기존 계약을 끝내는 DB 업데이트(`property_id` 기준 폭넓은 조건)와 새 계약 INSERT를 동시에 fire-and-forget으로 날리다가, 요청이 뒤섞이면 방금 만든 새 계약까지 "종료됨"으로 잘못 처리되는 레이스 컨디션이 있었음 → 종료할 계약을 미리 특정 id로 콕 집어서 업데이트하도록 수정 (`RecordPage`의 계약마무리는 원래부터 id 기준이라 안전했음)
+- **아직 안 한 것**: `channels`/`logs`/`reviews`는 테이블만 만들어두고 아직 로컬 상태 그대로 사용, 회원 탈퇴 로직 미구현
+
+### ✅ 사진 Storage 전환 (2026-09-30)
+- 기준 사진(`refPhotos`)·입실 추가사진·퇴실 사진·공과금 사진·퇴실 추가사진 — 전부 base64 문자열 대신 Supabase Storage(`room-photos` 버킷, public)에 업로드하고 URL만 저장하도록 전환
+- 업로드 전 클라이언트에서 가로 1280px로 리사이즈 + JPEG 압축(`resizeImage`/`uploadPhoto` 헬퍼, App.jsx 상단)
+- Storage 경로 규칙: `landlord/{ownerId}/{propertyId}/...`(임대인 본인만 쓰기), `tenant/{token}/...`(로그인 없는 세입자도 업로드 가능 — 링크 토큰 자체가 비밀번호 역할). SQL(`storage.objects` RLS)로 이 규칙을 강제함 — 익명이 `landlord/` 경로에 쓰려고 하면 차단되는 것까지 직접 테스트로 확인
+- 읽기는 버킷 자체가 public이라 누구나 URL로 바로 접근 가능(서명 URL 방식 아님) — 방 사진·공과금 영수증 수준의 민감도라 판단해 단순함을 택함. 더 민감한 자료를 다루게 되면 재검토 필요
+
 ### ✅ 랜딩 페이지 전면 개편 (2026-09-21~22)
 - 스토리 구성: 첫 화면(질문+보고서 미리보기) → "이미 보증금은 돌려줬는데 이런 상태라면?" → "임차인이라면 이런 사진 올릴 수 있을까요?"(냉장고 전/후) → **"이렇게 사용해요"**(입주할 때/퇴실할 때/최종 보고서 3단계, 실제 앱 캡처 동일 사진으로 스토리 이어짐) → 장점 4개(짧은 문구) → 이런 분께 좋아요(5개) → FAQ 4개 → 마지막 CTA
 - 사용설명서 그림은 전부 headless Chrome(puppeteer-core)으로 실제 앱을 조작해 캡처한 것 (`public/landing/app-*.jpg`). 캡처 스크립트는 프로젝트 밖 scratchpad에 두고 저장소에는 올리지 않음
@@ -134,19 +154,14 @@ checkinSubmitted=false, checkoutSubmitted=false  (블랭크 계약, 링크는 �
 
 ## 남은 작업 (우선순위 순)
 
-### 1. Supabase DB 연결 (다음 작업)
-- **현재**: 모든 상태가 `useState` in-memory — 새로고침하면 전부 초기화
-- `.env.local`에 `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` 설정 필요
-- Supabase 코드는 `src/lib/supabase.js`에 집중
-- **필요 테이블**: users, properties, contracts, channels, logs, reviews
-- 이때 같이 처리할 것:
-  - 사진을 base64가 아니라 Storage에 업로드 + URL 참조로 전환 (지금은 `refPhotos`/`checkinData`/`checkoutData`에 base64 문자열을 그대로 넣고 있어 용량이 큼). 업로드 전 클라이언트에서 리사이즈(가로 1280px 안팎) 권장
-  - 계약 `baseline` 스냅샷을 사진 파일 복사가 아니라 참조 방식으로 저장 (용량 절감)
-  - 지난 보고서 보관 정책 결정 필요 (건수 제한보다 기간 기준 + 삭제 전 안내를 권장, 2026-09-21 논의)
-  - 회원 탈퇴는 현재 자리표시자(실제로 데이터 안 지움) — 진짜 탈퇴 로직 필요
+### 1. 실기기(폰)로 임차인 링크 테스트 (다음 작업)
+- 방/계약 DB 연결 + 사진 Storage 전환이 끝나서 이제 실제로 가능해짐 — 입실/퇴실 링크를 문자로 보내서 폰 브라우저로 직접 열어보고 사진 업로드까지 확인
+- 지난 보고서 보관 정책 결정 필요 (건수 제한보다 기간 기준 + 삭제 전 안내를 권장, 2026-09-21 논의)
+- 회원 탈퇴는 현재 자리표시자(실제로 데이터 안 지움) — 진짜 탈퇴 로직 필요 (Supabase Auth 계정 삭제 + 관련 행 정리, Storage에 남은 사진 파일도 같이 정리)
+- `channels`(채널 탭)/`logs`(활동기록)/`reviews`(후기)는 테이블만 만들어두고 아직 로컬 `useState` 그대로 — 필요해지면 이것도 DB로 전환
 
 ### 2. 정식 개인정보처리방침 문서 작성
-- Supabase 연결(실제 데이터 저장 시작) 전에 준비
+- **주의**: Supabase 연결로 이미 실제 데이터 저장이 시작됐음 — 원래 "연결 전에 준비"하려던 문서라 우선순위 높음
 - 임차인 동의 방식을 체크박스형 명시적 동의로 강화할지 검토
 
 ### 3. PWA 설정
@@ -155,7 +170,7 @@ checkinSubmitted=false, checkoutSubmitted=false  (블랭크 계약, 링크는 �
 - iOS Safari 지원 메타태그 확인
 
 ### 4. 소셜 로그인 실제 연동
-- 현재 카카오/네이버 버튼은 UI만 있고 실제로 DEMO 계정으로 연결됨
+- 현재 카카오/네이버 버튼은 누르면 "곧 지원 예정" 안내만 뜸 (로그인 자체는 이메일/비밀번호만 실연동됨)
 - Supabase Auth로 카카오/네이버 OAuth 연동 필요
 
 ### 5. 카카오 알림톡 (사업자등록증 발급 후)
@@ -210,29 +225,34 @@ checkinSubmitted=false, checkoutSubmitted=false  (블랭크 계약, 링크는 �
 ### 파일 구조 (현재 → 목표)
 ```
 src/
-  App.jsx          # 현재 모든 코드가 여기 (약 1980줄)
+  App.jsx          # 현재 모든 코드가 여기 (약 2100줄)
   main.jsx
   index.css
   lib/
-    supabase.js    # Supabase 클라이언트 (연결 후 생성)
+    supabase.js    # Supabase 클라이언트
   components/      # 공용 컴포넌트 분리 시 여기로
   pages/           # 페이지 컴포넌트 분리 시 여기로
 public/
   landing/         # 랜딩용 이미지 (실제 앱 캡처 + 방 사진, 저장소에 포함)
 landing-assets/     # 랜딩용 원본 사진 (.gitignore 처리, 저장소에 없음)
+supabase/
+  schema.sql       # 최초 스키마 (테이블+RLS+RPC 함수) — SQL Editor에 한 번 실행한 것, 기록용
+  migrations/      # 이후 스키마 변경분. 번호 순서대로 SQL Editor에서 실행
 ```
-지금은 App.jsx 단일 파일 유지. 분리는 Supabase 연결 이후에 논의.
+지금은 App.jsx 단일 파일 유지. 분리는 나중에 필요해지면 논의.
 
 ### 데이터 변경 방법
-- `updateDb(s => ({...s, ...}))` — 클로저 안전, 비동기 배치 처리
+- `updateDb(s => ({...s, ...}))` — 클로저 안전, 비동기 배치 처리 (로컬 상태만 갱신)
 - `upDb({key: value})` — 최상위 키만 바꿀 때 단순 패치
 - `useState` 직접 조작 금지 — 반드시 위 두 함수 경유
+- **방/계약을 바꾸는 곳은 `updateDb` 호출 바로 옆에 `supabase.from(...).update/insert/delete(...).then(dbErr("설명"))`을 같이 써서 DB에도 반영한다** (App.jsx 상단 `propToDb`/`propFromDb`/`contractToDb`/`contractFromDb`가 camelCase↔snake_case 변환 담당). `dbErr`는 실패 시 콘솔에만 로그 — 실패해도 롤백하지 않는 낙관적 업데이트 방식이라, 새 테이블/필드를 추가할 땐 먼저 SQL로 컬럼을 만들고 나서 코드에서 쓸 것 (순서 반대로 하면 "column not found" 에러)
+- `channels`/`logs`/`reviews`는 아직 DB에 안 붙어있어 로컬 상태만 바뀜 (테이블은 이미 만들어져 있음)
 - 확인이 필요한 액션은 `askConfirm(message, onOk, {okLabel, danger})` 사용 (App() 컴포넌트 안에 정의됨)
 
 ### 인증·권한
-- `user.isAdmin === true` 이면 Admin 탭 표시
-- 데모 계정: `DEMO = { id:"demo", email:"demo@test.com", pw:"1234", isAdmin:true }`
-- 임차인(토큰 사용자)은 계정 없이 접근 — `linkToken` 상태로 처리
+- Supabase Auth(이메일/비밀번호) 실연동. `user.isAdmin`은 `profiles.is_admin` 컬럼에서 옴 — 관리자로 만들려면 SQL로 직접 `update profiles set is_admin=true where id=...` 실행
+- 개발 모드 전용 원클릭 로그인(`DEV_ACCOUNTS`, `AuthPage` 안)이 있음 — `import.meta.env.DEV`일 때만 렌더링되어 배포 빌드에는 안 나타남. 관리자(`ipteosil.admin@example.com`)/테스트 임대인(`ipteosil.test1@example.com`) 계정, 둘 다 비밀번호 `test1234`
+- 임차인(토큰 사용자)은 계정 없이 접근 — `linkToken` 상태로 처리, `get_contract_by_token`/`submit_checkin`/`submit_checkout` RPC로 DB와 통신
 
 ### 환경변수 (.env.local, git 제외)
 ```

@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import { supabase } from "./lib/supabase";
 
 const C = {
   primary:"#3366FF", primaryLight:"#EEF2FF", primaryText:"#1A3FCC",
@@ -29,12 +30,74 @@ const blankProperty = (id, ownerId, name) => ({
   spaces:[...SPACES], refPhotos:{},
 });
 const blankContract = (propertyId) => ({
-  id:genId(), propertyId, status:"active",
+  id:crypto.randomUUID(), propertyId, status:"active",
   checkinToken:genToken(), checkoutToken:genToken(), createdAt:nowStr(),
   deposit:"", monthly:"", startDate:"", endDate:"", tenantName:"", tenantPhone:"",
   checkinSubmitted:false, checkoutSubmitted:false,
   checkinSentAt:null, checkoutSentAt:null,
 });
+
+// ── DB 행 ↔ 앱 데이터 모양 변환 ──
+const propToDb = (p) => ({
+  id:p.id, owner_id:p.ownerId, name:p.name, address:p.address, dong:p.dong, ho:p.ho,
+  no_pw:p.noPw, password:p.password, spaces:p.spaces, ref_photos:p.refPhotos,
+  checkin_msg:p.checkinMsg||null, checkout_msg:p.checkoutMsg||null,
+});
+const propFromDb = (r) => ({
+  id:r.id, ownerId:r.owner_id, name:r.name, address:r.address, dong:r.dong, ho:r.ho,
+  noPw:r.no_pw, password:r.password, spaces:r.spaces, refPhotos:r.ref_photos,
+  checkinMsg:r.checkin_msg, checkoutMsg:r.checkout_msg,
+});
+const contractToDb = (c) => ({
+  id:c.id, property_id:c.propertyId, status:c.status,
+  checkin_token:c.checkinToken, checkout_token:c.checkoutToken,
+  deposit:c.deposit, monthly:c.monthly,
+  start_date:c.startDate||null, end_date:c.endDate||null,
+  tenant_name:c.tenantName, tenant_phone:c.tenantPhone, memo:c.memo||"",
+  checkin_submitted:c.checkinSubmitted, checkout_submitted:c.checkoutSubmitted,
+  checkin_sent_at:c.checkinSentAt||null, checkout_sent_at:c.checkoutSentAt||null,
+  checkin_data:c.checkinData||null, checkout_data:c.checkoutData||null,
+  baseline:c.baseline||null, ended_at:c.endedAt||null,
+});
+const contractFromDb = (r) => ({
+  id:r.id, propertyId:r.property_id, status:r.status,
+  checkinToken:r.checkin_token, checkoutToken:r.checkout_token,
+  deposit:r.deposit, monthly:r.monthly, startDate:r.start_date, endDate:r.end_date,
+  tenantName:r.tenant_name, tenantPhone:r.tenant_phone, memo:r.memo,
+  checkinSubmitted:r.checkin_submitted, checkoutSubmitted:r.checkout_submitted,
+  checkinSentAt:r.checkin_sent_at, checkoutSentAt:r.checkout_sent_at,
+  checkinData:r.checkin_data, checkoutData:r.checkout_data,
+  baseline:r.baseline, createdAt:r.created_at, endedAt:r.ended_at,
+});
+const dbErr = (label) => ({error})=>{ if(error) console.error(`[supabase] ${label}`, error); };
+
+// 사진 파일을 가로 1280px 안팎으로 줄여서 업로드 용량을 줄임
+function resizeImage(file, maxWidth=1280) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxWidth/img.width);
+      const w = Math.round(img.width*scale), h = Math.round(img.height*scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      canvas.toBlob(blob => resolve(blob || file), "image/jpeg", 0.85);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
+}
+
+// 사진을 Storage(room-photos 버킷)에 올리고 공개 URL을 돌려줌
+async function uploadPhoto(folder, file) {
+  const resized = await resizeImage(file);
+  const path = `${folder}/${crypto.randomUUID()}.jpg`;
+  const { error } = await supabase.storage.from("room-photos").upload(path, resized, { contentType:"image/jpeg" });
+  if (error) { console.error("[supabase] 사진 업로드", error); return null; }
+  return supabase.storage.from("room-photos").getPublicUrl(path).data.publicUrl;
+}
 const daysDiff = (d) => { if(!d) return null; return Math.ceil((new Date(d)-new Date())/(1000*60*60*24)); };
 const timeAgo = (str) => {
   if(!str) return "";
@@ -46,7 +109,6 @@ const timeAgo = (str) => {
   } catch { return ""; }
 };
 
-const DEMO = { id:"demo", name:"김임대", email:"demo@test.com", pw:"1234", isAdmin:true, joinedAt:nowStr() };
 const SPACES = ["거실","방1","화장실","주방"];
 const DEFAULT_CI_MSG = `안녕하세요, [주소] 임대인입니다 😊\n입실 확인 링크를 보내드려요.\n아래 링크에 접속하셔서 현관 비밀번호와 방 상태를 확인해주세요!`;
 const DEFAULT_CO_MSG = `안녕하세요, [주소] 임대인입니다 😊\n퇴실 확인 링크를 보내드려요.\n아래 링크에 접속하셔서 현관 비밀번호와 보증금 반환 계좌를 입력해주세요!`;
@@ -95,8 +157,8 @@ const FixedBottom = ({children}) => (
   <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,padding:"12px 16px 20px",background:C.white,borderTop:`1px solid ${C.gray100}`,boxSizing:"border-box",zIndex:50}}>{children}</div>
 );
 const FieldLabel = ({label}) => <p style={{fontSize:F.sm,fontWeight:600,color:C.gray600,marginBottom:6}}>{label}</p>;
-const Inp = ({value,onChange,placeholder,type="text",style:s}) => (
-  <input value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} type={type}
+const Inp = ({value,onChange,placeholder,type="text",style:s,autoComplete,name}) => (
+  <input value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} type={type} autoComplete={autoComplete} name={name}
     style={{fontFamily:"inherit",fontSize:F.base,color:C.gray800,background:C.gray100,border:"1.5px solid transparent",borderRadius:R.md,padding:"13px 14px",outline:"none",width:"100%",boxSizing:"border-box",...s}}
     onFocus={e=>{e.target.style.borderColor=C.primary;e.target.style.background=C.white;}}
     onBlur={e=>{e.target.style.borderColor="transparent";e.target.style.background=C.gray100;}}
@@ -270,7 +332,7 @@ const ST = {
 // ── MAIN APP ──────────────────────────────────────
 export default function App() {
   const [db, setDb] = useState({
-    users:[DEMO], properties:[], contracts:[],
+    users:[], properties:[], contracts:[],
     channels:[
       {id:"n1",type:"notice",title:"입퇴실 도우미 오픈!",body:"서비스가 시작됐어요 😊",date:"2025.05.01"},
       {id:"c1",type:"content",title:"퇴거 분쟁 실제 사례 모음",body:"보증금 못 받은 실제 사례와 예방법을 정리했어요.",url:"https://naver.com",date:"2025.05.10"},
@@ -290,6 +352,8 @@ export default function App() {
   const upDb = (patch) => setDb(s=>({...s,...patch}));
 
   const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [dataLoading, setDataLoading] = useState(false);
   const [tab, setTab] = useState("home");
   const [stack, setStack] = useState([]);
   const [linkToken, setLinkToken] = useState(()=>{
@@ -297,6 +361,7 @@ export default function App() {
     return p.get("token")||null;
   });
   const [linkDone, setLinkDone] = useState(null);
+  const [linkData, setLinkData] = useState(null); // {loading} | {error:true} | {row}
   const [showReviewPopup, setShowReviewPopup] = useState(false);
   const [showLanding, setShowLanding] = useState(true);
   const [exitToast, setExitToast] = useState(false);
@@ -394,54 +459,128 @@ export default function App() {
     }
   };
 
-  const ensureFirstRoom = (uid) => updateDb(s=>{
-    if(s.properties.some(p=>p.ownerId===uid)) return s;
-    const id=genId();
-    return {...s,properties:[...s.properties,blankProperty(id,uid,"방 1")],contracts:[...s.contracts,blankContract(id)]};
-  });
-
   const log = (uid,action) => {
     const e={id:genId(),userId:uid,action,time:nowStr()};
     updateDb(s=>({...s,logs:[e,...(s.logs||[])].slice(0,500)}));
   };
 
+  // ── 내 방/계약을 Supabase에서 불러오기 (없으면 방 1개 자동 생성) ──
+  const loadMyData = useCallback(async (uid) => {
+    let { data: propRows } = await supabase.from("properties").select("*").eq("owner_id", uid).order("sort_order").order("created_at");
+    if (!propRows || propRows.length === 0) {
+      const newProp = blankProperty(crypto.randomUUID(), uid, "방 1");
+      await supabase.from("properties").insert(propToDb(newProp)).then(dbErr("방 생성"));
+      await supabase.from("contracts").insert(contractToDb(blankContract(newProp.id))).then(dbErr("계약 생성"));
+      ({ data: propRows } = await supabase.from("properties").select("*").eq("owner_id", uid).order("sort_order").order("created_at"));
+    }
+    const properties = (propRows || []).map(propFromDb);
+    const propIds = properties.map(p => p.id);
+    const { data: conRows } = propIds.length
+      ? await supabase.from("contracts").select("*").in("property_id", propIds).order("created_at")
+      : { data: [] };
+    const contracts = (conRows || []).map(contractFromDb);
+    updateDb(s => ({ ...s, properties, contracts }));
+  }, [updateDb]);
+
+  // ── Supabase 로그인 상태 감지 ──
+  useEffect(() => {
+    let active = true;
+    async function loadProfile(authUser) {
+      const { data: profile } = await supabase.from("profiles").select("*").eq("id", authUser.id).single();
+      if (!active) return;
+      const u = {
+        id: authUser.id, email: authUser.email,
+        name: profile?.name || "", phone: profile?.phone || "",
+        isAdmin: profile?.is_admin || false,
+        joinedAt: profile?.joined_at || authUser.created_at,
+      };
+      setUser(u);
+      setDataLoading(true);
+      await loadMyData(u.id);
+      if (!active) return;
+      setDataLoading(false);
+      setAuthLoading(false);
+    }
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!active) return;
+      if (session?.user) loadProfile(session.user); else setAuthLoading(false);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session?.user) {
+        loadProfile(session.user);
+        if (event === "SIGNED_IN") log(session.user.id, "login");
+      } else {
+        setUser(null);
+        setAuthLoading(false);
+      }
+    });
+    return () => { active = false; subscription.unsubscribe(); };
+  }, [loadMyData]);
+
+  // ── 임차인 링크(?token=...) — 로그인 없이 토큰으로만 계약 하나를 조회 ──
+  useEffect(() => {
+    if (!linkToken) { setLinkData(null); return; }
+    let active = true;
+    setLinkData({ loading: true });
+    supabase.rpc("get_contract_by_token", { p_token: linkToken }).then(({ data, error }) => {
+      if (!active) return;
+      if (error || !data || data.length === 0) { setLinkData({ error: true }); return; }
+      setLinkData({ row: data[0] });
+    });
+    return () => { active = false; };
+  }, [linkToken]);
+
   // ── link routing ──
   if(linkToken) {
-    const co = db.contracts.find(c=>c.checkinToken===linkToken||c.checkoutToken===linkToken);
-    if(!co||co.status==="ended") return <LinkPage icon="🔒" title="이 링크는 닫혔어요" sub="계약이 종료되어 링크가 만료됐어요." onBack={()=>setLinkToken(null)}/>;
-    const prop = db.properties.find(p=>p.id===co.propertyId);
-    if(co.checkinToken===linkToken) {
+    if(!linkData || linkData.loading) return <Page><div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:C.gray400,fontSize:F.base}}>불러오는 중...</div></Page>;
+    if(linkData.error) return <LinkPage icon="🔒" title="이 링크는 닫혔어요" sub="계약이 종료됐거나 존재하지 않는 링크예요." onBack={()=>setLinkToken(null)}/>;
+    const row = linkData.row;
+    if(row.status==="ended") return <LinkPage icon="🔒" title="이 링크는 닫혔어요" sub="계약이 종료되어 링크가 만료됐어요." onBack={()=>setLinkToken(null)}/>;
+    const co = {
+      id: row.contract_id, propertyId: row.property_id, status: row.status,
+      checkinSubmitted: row.checkin_submitted, checkoutSubmitted: row.checkout_submitted,
+      checkinData: row.checkin_data, checkoutData: row.checkout_data,
+      baseline: row.baseline, tenantName: row.tenant_name,
+    };
+    const prop = {
+      name: row.property_name, address: row.property_address, dong: row.property_dong, ho: row.property_ho,
+      password: row.property_password, noPw: row.property_no_pw,
+      spaces: row.property_spaces, refPhotos: row.property_ref_photos,
+    };
+    async function afterSubmit(){
+      if(user) await loadMyData(user.id);
+    }
+    if(row.is_checkin_link) {
       if(co.checkinSubmitted) return <LinkPage icon="✅" title="이미 제출됐어요" sub="입실 확인은 한 번만 가능해요." onBack={()=>setLinkToken(null)}/>;
-      return <CheckinForm co={co} prop={prop} onSubmit={d=>{
-        updateDb(s=>({...s,contracts:s.contracts.map(c=>{
-          if(c.id!==co.id) return c;
-          const p=s.properties.find(x=>x.id===c.propertyId);
-          return {...c,checkinSubmitted:true,checkinData:{...d,time:nowStr(),at:new Date().toISOString()},baseline:{spaces:[...(p?.spaces||[])],refPhotos:{...(p?.refPhotos||{})}}};
-        })}));
+      return <CheckinForm co={co} prop={prop} token={linkToken} onSubmit={async d=>{
+        const {error}=await supabase.rpc("submit_checkin",{p_token:linkToken,p_data:{...d,time:nowStr()}});
+        if(error){ console.error("[supabase] 입실 제출", error); return; }
+        await afterSubmit();
         setLinkToken(null); setLinkDone("checkin");
       }}/>;
     } else {
       if(co.checkoutSubmitted) return <LinkPage icon="✅" title="이미 제출됐어요" sub="퇴실 확인은 한 번만 가능해요." onBack={()=>setLinkToken(null)}/>;
-      return <CheckoutForm co={co} prop={prop} onSubmit={d=>{
-        updateDb(s=>({...s,contracts:s.contracts.map(c=>c.id===co.id?{...c,checkoutSubmitted:true,checkoutData:{...d,time:nowStr(),at:new Date().toISOString()},status:"submitted"}:c)}));
+      return <CheckoutForm co={co} prop={prop} token={linkToken} onSubmit={async d=>{
+        const {error}=await supabase.rpc("submit_checkout",{p_token:linkToken,p_data:{...d,time:nowStr()}});
+        if(error){ console.error("[supabase] 퇴실 제출", error); return; }
+        await afterSubmit();
         setLinkToken(null); setLinkDone("checkout");
       }}/>;
     }
   }
   if(linkDone) return <LinkDone type={linkDone} onBack={()=>setLinkDone(null)}/>;
+  if(authLoading || (user && dataLoading)) return <Page><div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:C.gray400,fontSize:F.base}}>불러오는 중...</div></Page>;
   if(!user && showLanding) return <LandingPage reviews={(db.reviews||[]).filter(r=>r.featured)} onStart={()=>setShowLanding(false)}/>;
-  if(!user) return <AuthPage users={db.users}
-    onLogin={u=>{setUser(u);ensureFirstRoom(u.id);log(u.id,"login");}}
-    onRegister={u=>{const nu={...u,id:genId(),isAdmin:false,joinedAt:nowStr()};upDb({users:[...db.users,nu]});setUser(nu);ensureFirstRoom(nu.id);log(nu.id,"register");}}
-  />;
+  if(!user) return <AuthPage/>;
 
-  const myProps = db.properties.filter(p=>p.ownerId===user.id);
+  const myProps = db.properties;
 
   // ── sub-views ──
   if(cur?.v==="addProp") return (
     <AddPropPage prop={cur.ctx.prop}
       onSave={p=>{
         updateDb(s=>({...s,properties:s.properties.map(x=>x.id===cur.ctx.prop.id?{...x,...p}:x)}));
+        supabase.from("properties").update(p).eq("id",cur.ctx.prop.id).then(dbErr("방 정보 수정"));
         pop();
       }} onBack={pop}/>
   );
@@ -450,13 +589,24 @@ export default function App() {
     const prop=db.properties.find(p=>p.id===cur.ctx.propId);
     const past=db.contracts.filter(c=>c.propertyId===cur.ctx.propId&&c.status==="ended").reverse();
     return <PastReportsPage prop={prop} past={past} onViewRecord={id=>push("record",{coId:id})}
-      onDelete={id=>updateDb(s=>({...s,contracts:s.contracts.filter(c=>c.id!==id)}))} onBack={pop}/>;
+      onDelete={id=>{
+        updateDb(s=>({...s,contracts:s.contracts.filter(c=>c.id!==id)}));
+        supabase.from("contracts").delete().eq("id",id).then(dbErr("지난 계약 삭제"));
+      }} onBack={pop}/>;
   }
 
   if(cur?.v==="contractMemo") {
     const co=db.contracts.find(c=>c.id===cur.ctx.coId);
     return <ContractMemoPage co={co}
-      onSave={patch=>{updateDb(s=>({...s,contracts:s.contracts.map(c=>c.id===co.id?{...c,...patch}:c)}));pop();}}
+      onSave={patch=>{
+        updateDb(s=>({...s,contracts:s.contracts.map(c=>c.id===co.id?{...c,...patch}:c)}));
+        supabase.from("contracts").update({
+          deposit:patch.deposit, monthly:patch.monthly,
+          start_date:patch.startDate||null, end_date:patch.endDate||null,
+          tenant_name:patch.tenantName, tenant_phone:patch.tenantPhone, memo:patch.memo,
+        }).eq("id",co.id).then(dbErr("메모 저장"));
+        pop();
+      }}
       onBack={pop}/>;
   }
 
@@ -464,9 +614,19 @@ export default function App() {
     const prop=db.properties.find(p=>p.id===cur.ctx.propId);
     const co=db.contracts.find(c=>c.id===cur.ctx.coId);
     return <CheckinSetupPage prop={prop} co={co}
-      onSaveProp={patch=>updateDb(s=>({...s,properties:s.properties.map(p=>p.id===prop.id?{...p,...patch}:p)}))}
+      onSaveProp={patch=>{
+        updateDb(s=>({...s,properties:s.properties.map(p=>p.id===prop.id?{...p,...patch}:p)}));
+        supabase.from("properties").update({
+          no_pw:patch.noPw, password:patch.password, spaces:patch.spaces,
+          ref_photos:patch.refPhotos, checkin_msg:patch.checkinMsg,
+        }).eq("id",prop.id).then(dbErr("입실 설정 저장"));
+      }}
       onSimCheckin={t=>setLinkToken(t)}
-      onMarkSent={()=>updateDb(s=>({...s,contracts:s.contracts.map(c=>c.id===co.id?{...c,checkinSentAt:new Date().toISOString()}:c)}))}
+      onMarkSent={()=>{
+        const at=new Date().toISOString();
+        updateDb(s=>({...s,contracts:s.contracts.map(c=>c.id===co.id?{...c,checkinSentAt:at}:c)}));
+        supabase.from("contracts").update({checkin_sent_at:at}).eq("id",co.id).then(dbErr("입실 링크 발송 기록"));
+      }}
       onBack={pop}/>;
   }
 
@@ -474,9 +634,16 @@ export default function App() {
     const prop=db.properties.find(p=>p.id===cur.ctx.propId);
     const co=db.contracts.find(c=>c.id===cur.ctx.coId);
     return <CheckoutSetupPage prop={prop} co={co}
-      onSaveProp={patch=>updateDb(s=>({...s,properties:s.properties.map(p=>p.id===prop.id?{...p,...patch}:p)}))}
+      onSaveProp={patch=>{
+        updateDb(s=>({...s,properties:s.properties.map(p=>p.id===prop.id?{...p,...patch}:p)}));
+        supabase.from("properties").update({checkout_msg:patch.checkoutMsg}).eq("id",prop.id).then(dbErr("퇴실 설정 저장"));
+      }}
       onSimCheckout={t=>setLinkToken(t)}
-      onMarkSent={()=>updateDb(s=>({...s,contracts:s.contracts.map(c=>c.id===co.id?{...c,checkoutSentAt:new Date().toISOString()}:c)}))}
+      onMarkSent={()=>{
+        const at=new Date().toISOString();
+        updateDb(s=>({...s,contracts:s.contracts.map(c=>c.id===co.id?{...c,checkoutSentAt:at}:c)}));
+        supabase.from("contracts").update({checkout_sent_at:at}).eq("id",co.id).then(dbErr("퇴실 링크 발송 기록"));
+      }}
       onBack={pop}/>;
   }
 
@@ -490,7 +657,10 @@ export default function App() {
       />}
       <RecordPage co={co} prop={prop}
         onEndContract={co?.status!=="ended" ? () => askConfirm("계약을 마무리할까요? 이 기록은 지난 계약으로 저장돼요.",()=>{
-          updateDb(s=>({...s,contracts:[...s.contracts.map(c=>c.id===co.id?{...c,status:"ended",endedAt:nowStr()}:c),blankContract(co.propertyId)]}));
+          const newCo=blankContract(co.propertyId);
+          updateDb(s=>({...s,contracts:[...s.contracts.map(c=>c.id===co.id?{...c,status:"ended",endedAt:nowStr()}:c),newCo]}));
+          supabase.from("contracts").update({status:"ended",ended_at:new Date().toISOString()}).eq("id",co.id).then(dbErr("계약 마무리"));
+          supabase.from("contracts").insert(contractToDb(newCo)).then(dbErr("새 계약 생성"));
           const hasReviewed=(db.reviews||[]).some(r=>r.userId===user.id);
           if(hasReviewed) pop(); else setShowReviewPopup(true);
         },{okLabel:"마무리하기"}) : null}
@@ -517,18 +687,28 @@ export default function App() {
     <div style={{minHeight:"100vh",background:C.gray50,display:"flex",flexDirection:"column",fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"}}>
       <div style={{flex:1,overflowY:"auto",paddingBottom:72}}>
         {tab==="home" && <HomeTab user={user} props={myProps} contracts={db.contracts}
-          onRenameProp={(id,name)=>updateDb(s=>({...s,properties:s.properties.map(p=>p.id===id?{...p,name}:p)}))}
-          onReorderProps={ids=>updateDb(s=>{
-            const byId=Object.fromEntries(s.properties.map(p=>[p.id,p]));
-            let i=0;
-            return {...s,properties:s.properties.map(p=>p.ownerId===user.id?byId[ids[i++]]:p)};
-          })}
+          onRenameProp={(id,name)=>{
+            updateDb(s=>({...s,properties:s.properties.map(p=>p.id===id?{...p,name}:p)}));
+            supabase.from("properties").update({name}).eq("id",id).then(dbErr("방 이름 수정"));
+          }}
+          onReorderProps={ids=>{
+            updateDb(s=>{
+              const byId=Object.fromEntries(s.properties.map(p=>[p.id,p]));
+              return {...s,properties:ids.map(id=>byId[id])};
+            });
+            ids.forEach((id,idx)=>supabase.from("properties").update({sort_order:idx}).eq("id",id).then(dbErr("방 순서 저장")));
+          }}
           onEditProp={prop=>push("addProp",{prop})}
-          onStartNewTenant={prop=>askConfirm("새 입주자를 시작할까요? 현재 계약 기록은 지난 계약으로 이동하고, 새 입주/퇴실 링크가 발급돼요.",()=>{
-            updateDb(s=>({...s,contracts:[...s.contracts.map(c=>c.propertyId===prop.id&&c.status!=="ended"?{...c,status:"ended",endedAt:nowStr()}:c),blankContract(prop.id)]}));
+          onStartNewTenant={prop=>askConfirm("새 입주자를 시작할까요? 현재 계약 기록은 지난 계약으로 이동하고, 새 입주/퇴실 링크가 발급돼요.",async()=>{
+            const oldIds=db.contracts.filter(c=>c.propertyId===prop.id&&c.status!=="ended").map(c=>c.id);
+            const newCo=blankContract(prop.id);
+            updateDb(s=>({...s,contracts:[...s.contracts.map(c=>oldIds.includes(c.id)?{...c,status:"ended",endedAt:nowStr()}:c),newCo]}));
+            if(oldIds.length) await supabase.from("contracts").update({status:"ended",ended_at:new Date().toISOString()}).in("id",oldIds).then(dbErr("계약 마무리"));
+            supabase.from("contracts").insert(contractToDb(newCo)).then(dbErr("새 계약 생성"));
           },{okLabel:"새 입주자 시작"})}
           onDeleteProp={prop=>askConfirm("삭제하면 이 방의 모든 기록이 사라져요. 그래도 삭제할까요?",()=>{
             updateDb(s=>({...s,properties:s.properties.filter(p=>p.id!==prop.id),contracts:s.contracts.filter(c=>c.propertyId!==prop.id)}));
+            supabase.from("properties").delete().eq("id",prop.id).then(dbErr("방 삭제"));
           },{okLabel:"삭제",danger:true})}
           onOpenMemo={coId=>push("contractMemo",{coId})}
           onOpenCheckin={(propId,coId)=>push("checkinSetup",{propId,coId})}
@@ -536,15 +716,19 @@ export default function App() {
           onViewRecord={coId=>push("record",{coId})}
           onOpenPast={propId=>push("pastReports",{propId})}
           onAddProp={()=>{
-            const id=genId();
-            updateDb(s=>({...s,properties:[...s.properties,blankProperty(id,user.id,`방 ${myProps.length+1}`)],contracts:[...s.contracts,blankContract(id)]}));
+            const id=crypto.randomUUID();
+            const newProp=blankProperty(id,user.id,`방 ${myProps.length+1}`);
+            const newCo=blankContract(id);
+            updateDb(s=>({...s,properties:[...s.properties,newProp],contracts:[...s.contracts,newCo]}));
+            supabase.from("properties").insert({...propToDb(newProp),sort_order:myProps.length}).then(dbErr("방 추가"));
+            supabase.from("contracts").insert(contractToDb(newCo)).then(dbErr("계약 생성"));
           }}
           showInstallBanner={showInstallBanner}
           onInstallClick={handleInstallClick}
           onDismissInstallBanner={dismissInstallBanner}/>}
         {tab==="channel" && <ChannelTab items={db.channels} isAdmin={user.isAdmin} onEdit={item=>push("channelEdit",{item})} onAdd={type=>push("channelEdit",{item:{type,title:"",body:"",url:"",date:new Date().toLocaleDateString("ko-KR")}})}/>}
         {tab==="share" && <ShareTab/>}
-        {tab==="settings" && <SettingsTab user={user} contactEmail={db.contactEmail} onLogout={()=>{setUser(null);setStack([]);setTab("home");setShowLanding(false);}} onUpdateEmail={e=>upDb({contactEmail:e})}
+        {tab==="settings" && <SettingsTab user={user} contactEmail={db.contactEmail} onLogout={async()=>{await supabase.auth.signOut();setUser(null);setStack([]);setTab("home");setShowLanding(false);}} onUpdateEmail={e=>upDb({contactEmail:e})}
           canInstallPwa={!isStandalone} onInstallClick={handleInstallClick}/>}
         {tab==="admin" && user.isAdmin && <AdminTab db={db} onUserClick={u=>push("adminUser",{u})} onToggleReviewFeatured={id=>updateDb(s=>({...s,reviews:(s.reviews||[]).map(r=>r.id===id?{...r,featured:!r.featured}:r)}))}/>}
       </div>
@@ -914,25 +1098,44 @@ function ConsentRow({checked,onChange,label,detail}) {
 const CONSENT_REQUIRED="· 수집 항목: 이름, 이메일, 비밀번호\n· 이용 목적: 회원 가입·관리, 서비스 제공\n· 보유 기간: 회원 탈퇴 시까지 (탈퇴 후 30일 뒤 완전히 삭제)\n· 동의하지 않으면 회원가입이 어려워요";
 const CONSENT_PHONE="· 수집 항목: 휴대폰번호\n· 이용 목적: 서비스 알림 발송, 문의 응대\n· 보유 기간: 회원 탈퇴 시까지 (탈퇴 후 30일 뒤 완전히 삭제)\n· 동의하지 않아도 서비스는 그대로 이용할 수 있어요";
 
-function AuthPage({users,onLogin,onRegister}) {
+const AUTH_ERR_MAP = {
+  "Invalid login credentials": "이메일 또는 비밀번호가 맞지 않아요.",
+  "User already registered": "이미 가입된 이메일이에요.",
+};
+function authErrText(msg){ return AUTH_ERR_MAP[msg] || msg; }
+
+// 개발 중에만(배포된 사이트에는 안 보임) 원클릭 로그인용 테스트 계정
+const DEV_ACCOUNTS = [
+  { label:"🔧 관리자로 로그인", email:"ipteosil.admin@example.com", pw:"test1234" },
+  { label:"🔧 테스트 임대인으로 로그인", email:"ipteosil.test1@example.com", pw:"test1234" },
+];
+
+function AuthPage() {
   const [mode,setMode]=useState("login");
   const [name,setName]=useState(""); const [email,setEmail]=useState(""); const [pw,setPw]=useState(""); const [err,setErr]=useState("");
   const [phone,setPhone]=useState(""); const [agreePrivacy,setAgreePrivacy]=useState(false); const [agreePhone,setAgreePhone]=useState(false);
-  function doLogin(){
-    if(!email||!pw){setErr("이메일과 비밀번호를 입력해주세요.");return;}
-    const u=users.find(u=>u.email===email&&u.pw===pw);
-    if(!u){setErr("이메일 또는 비밀번호가 맞지 않아요.");return;}
-    onLogin(u);
+  const [busy,setBusy]=useState(false); const [socialNotice,setSocialNotice]=useState(false);
+  async function doLogin(overrides){
+    if(busy) return;
+    const e=overrides?.email??email, p=overrides?.pw??pw;
+    if(!e||!p){setErr("이메일과 비밀번호를 입력해주세요.");return;}
+    setErr(""); setBusy(true);
+    const {error}=await supabase.auth.signInWithPassword({email:e,password:p});
+    setBusy(false);
+    if(error) setErr(authErrText(error.message));
   }
-  function doRegister(){
+  async function doRegister(){
+    if(busy) return;
     if(!name||!email||!pw){setErr("모두 입력해주세요.");return;}
-    const dup=users.find(u=>u.email===email);
-    if(dup){setErr(`이미 가입된 이메일이에요. ${dup.loginMethod||"이메일"}로 가입하셨어요.`);return;}
+    if(pw.length<6){setErr("비밀번호는 6자 이상이어야 해요.");return;}
     const ph=phone.trim();
     if(ph&&!/^01[016789]-?\d{3,4}-?\d{4}$/.test(ph)){setErr("휴대폰번호 형식을 확인해주세요. (예: 010-1234-5678)");return;}
     if(!agreePrivacy){setErr("[필수] 개인정보 수집·이용에 동의해주세요.");return;}
     if(ph&&!agreePhone){setErr("휴대폰번호를 적으셨다면 [선택] 휴대폰번호 수집·이용 동의도 체크해주세요.");return;}
-    onRegister({name,email,pw,phone:ph,loginMethod:"email",consents:{privacy:nowStr(),phone:ph?nowStr():null}});
+    setErr(""); setBusy(true);
+    const {error}=await supabase.auth.signUp({email,password:pw,options:{data:{name,phone:ph||null}}});
+    setBusy(false);
+    if(error) setErr(authErrText(error.message));
   }
   return (
     <div style={{minHeight:"100vh",background:C.gray50,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"}}>
@@ -942,27 +1145,39 @@ function AuthPage({users,onLogin,onRegister}) {
         <h1 style={{fontSize:F.xxl,fontWeight:700,color:C.gray900,marginBottom:8}}>입퇴실 도우미</h1>
         <p style={{fontSize:F.base,color:C.gray600,lineHeight:1.6}}>방 상태 기록, 분쟁 없이 임대하세요</p>
       </div>
+      {socialNotice && <ConfirmModal message="소셜 로그인은 곧 지원될 예정이에요. 지금은 이메일로 가입해주세요!" okOnly onOk={()=>setSocialNotice(false)} onClose={()=>setSocialNotice(false)}/>}
       {mode==="login" ? <>
-        <button onClick={()=>onLogin(DEMO)} style={{width:"100%",padding:"14px",background:"#FEE500",borderRadius:R.lg,fontSize:F.base,fontWeight:700,color:"#3C1E1E",marginBottom:10,border:"none",cursor:"pointer"}}>카카오로 시작하기</button>
-        <button onClick={()=>onLogin(DEMO)} style={{width:"100%",padding:"14px",background:"#03C75A",borderRadius:R.lg,fontSize:F.base,fontWeight:700,color:C.white,marginBottom:10,border:"none",cursor:"pointer"}}>네이버로 시작하기</button>
+        <button onClick={()=>setSocialNotice(true)} style={{width:"100%",padding:"14px",background:"#FEE500",borderRadius:R.lg,fontSize:F.base,fontWeight:700,color:"#3C1E1E",marginBottom:10,border:"none",cursor:"pointer"}}>카카오로 시작하기</button>
+        <button onClick={()=>setSocialNotice(true)} style={{width:"100%",padding:"14px",background:"#03C75A",borderRadius:R.lg,fontSize:F.base,fontWeight:700,color:C.white,marginBottom:10,border:"none",cursor:"pointer"}}>네이버로 시작하기</button>
         <Divider label="또는"/>
-        <Inp value={email} onChange={setEmail} placeholder="이메일 (vamos1013@naver.com)" type="email" style={{marginBottom:10}}/>
-        <Inp value={pw} onChange={setPw} placeholder="비밀번호" type="password" style={{marginBottom:err?6:16}}/>
-        {err && <p style={{color:C.danger,fontSize:F.sm,marginBottom:12,alignSelf:"flex-start"}}>{err}</p>}
-        <PrimaryBtn label="로그인" onClick={doLogin} style={{marginBottom:10}}/>
-        <OutlineBtn label="🚀 데모 계정으로 시작하기" onClick={()=>onLogin(DEMO)} style={{marginBottom:16}}/>
-        <p style={{fontSize:F.sm,color:C.gray600}}>계정이 없으신가요? <span style={{color:C.primary,fontWeight:600,cursor:"pointer"}} onClick={()=>setMode("register")}>회원가입</span></p>
+        <form onSubmit={e=>{e.preventDefault();doLogin();}} style={{width:"100%"}}>
+          <Inp value={email} onChange={setEmail} placeholder="이메일 (vamos1013@naver.com)" type="email" autoComplete="username" name="email" style={{marginBottom:10}}/>
+          <Inp value={pw} onChange={setPw} placeholder="비밀번호" type="password" autoComplete="current-password" name="password" style={{marginBottom:err?6:16}}/>
+          {err && <p style={{color:C.danger,fontSize:F.sm,marginBottom:12,alignSelf:"flex-start"}}>{err}</p>}
+          <PrimaryBtn label={busy?"로그인 중...":"로그인"} style={{marginBottom:16}}/>
+        </form>
+        <p style={{fontSize:F.sm,color:C.gray600}}>계정이 없으신가요? <span style={{color:C.primary,fontWeight:600,cursor:"pointer"}} onClick={()=>{setErr("");setMode("register");}}>회원가입</span></p>
+        {import.meta.env.DEV && (
+          <div style={{width:"100%",marginTop:20,paddingTop:16,borderTop:`1px dashed ${C.gray200}`}}>
+            <p style={{fontSize:F.xs,color:C.gray400,marginBottom:8,textAlign:"center"}}>개발용 (배포 사이트엔 안 보여요)</p>
+            {DEV_ACCOUNTS.map(acc=>(
+              <OutlineBtn key={acc.email} label={acc.label} onClick={()=>doLogin(acc)} style={{marginBottom:8,padding:"10px"}}/>
+            ))}
+          </div>
+        )}
       </> : <>
-        <Inp value={name} onChange={setName} placeholder="이름 (홍길동)" style={{marginBottom:10}}/>
-        <Inp value={email} onChange={setEmail} placeholder="이메일" type="email" style={{marginBottom:10}}/>
-        <Inp value={pw} onChange={setPw} placeholder="비밀번호" type="password" style={{marginBottom:10}}/>
-        <Inp value={phone} onChange={setPhone} placeholder="휴대폰번호 (선택) 010-1234-5678" type="tel" style={{marginBottom:4}}/>
-        <p style={{fontSize:F.xs,color:C.gray400,marginBottom:14,alignSelf:"flex-start"}}>임차인 확인 알림을 받고 싶을 때 적어주세요. 나중에도 적을 수 있어요</p>
-        <ConsentRow checked={agreePrivacy} onChange={setAgreePrivacy} label="[필수] 개인정보 수집·이용 동의" detail={CONSENT_REQUIRED}/>
-        <ConsentRow checked={agreePhone} onChange={setAgreePhone} label="[선택] 휴대폰번호 수집·이용 동의" detail={CONSENT_PHONE}/>
-        {err && <p style={{color:C.danger,fontSize:F.sm,margin:"4px 0 12px",alignSelf:"flex-start"}}>{err}</p>}
-        <PrimaryBtn label="가입하기" onClick={doRegister} style={{margin:"8px 0 16px"}}/>
-        <p style={{fontSize:F.sm,color:C.gray600}}>이미 계정이 있으신가요? <span style={{color:C.primary,fontWeight:600,cursor:"pointer"}} onClick={()=>setMode("login")}>로그인</span></p>
+        <form onSubmit={e=>{e.preventDefault();doRegister();}} style={{width:"100%"}}>
+          <Inp value={name} onChange={setName} placeholder="이름 (홍길동)" autoComplete="name" name="name" style={{marginBottom:10}}/>
+          <Inp value={email} onChange={setEmail} placeholder="이메일" type="email" autoComplete="username" name="email" style={{marginBottom:10}}/>
+          <Inp value={pw} onChange={setPw} placeholder="비밀번호 (6자 이상)" type="password" autoComplete="new-password" name="password" style={{marginBottom:10}}/>
+          <Inp value={phone} onChange={setPhone} placeholder="휴대폰번호 (선택) 010-1234-5678" type="tel" autoComplete="tel" name="phone" style={{marginBottom:4}}/>
+          <p style={{fontSize:F.xs,color:C.gray400,marginBottom:14,alignSelf:"flex-start"}}>임차인 확인 알림을 받고 싶을 때 적어주세요. 나중에도 적을 수 있어요</p>
+          <ConsentRow checked={agreePrivacy} onChange={setAgreePrivacy} label="[필수] 개인정보 수집·이용 동의" detail={CONSENT_REQUIRED}/>
+          <ConsentRow checked={agreePhone} onChange={setAgreePhone} label="[선택] 휴대폰번호 수집·이용 동의" detail={CONSENT_PHONE}/>
+          {err && <p style={{color:C.danger,fontSize:F.sm,margin:"4px 0 12px",alignSelf:"flex-start"}}>{err}</p>}
+          <PrimaryBtn label={busy?"가입하는 중...":"가입하기"} style={{margin:"8px 0 16px"}}/>
+        </form>
+        <p style={{fontSize:F.sm,color:C.gray600}}>이미 계정이 있으신가요? <span style={{color:C.primary,fontWeight:600,cursor:"pointer"}} onClick={()=>{setErr("");setMode("login");}}>로그인</span></p>
       </>}
     </div>
     </div>
@@ -1289,7 +1504,11 @@ function CheckinSetupPage({prop,co,onSaveProp,onSimCheckin,onMarkSent,onBack}) {
   const hadPhotos=useRef(Object.keys(prop.refPhotos||{}).length>0);
   const fileRefs=useRef({});
 
-  function hPhoto(sp,e){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>setRefPhotos(s=>({...s,[sp]:ev.target.result}));r.readAsDataURL(f);}
+  async function hPhoto(sp,e){
+    const f=e.target.files[0]; if(!f) return;
+    const url=await uploadPhoto(`landlord/${prop.ownerId}/${prop.id}`,f);
+    if(url) setRefPhotos(s=>({...s,[sp]:url}));
+  }
 
   function doSave() {
     onSaveProp({noPw,password:noPw?"":pw,spaces,refPhotos,checkinMsg:ciMsg});
@@ -1531,11 +1750,19 @@ function RecordPage({co,prop,onBack,onEndContract}) {
 }
 
 // ── CHECKIN FORM ──────────────────────────────────
-function CheckinForm({co,prop,onSubmit}) {
+function CheckinForm({co,prop,token,onSubmit}) {
   const [extras,setExtras]=useState([]);
   const [noExtra,setNoExtra]=useState(false);
   const [showPw,setShowPw]=useState(false);
+  const [uploading,setUploading]=useState(false);
   const extraRef=useRef(null);
+  async function addExtra(e){
+    const f=e.target.files[0]; if(!f) return;
+    setUploading(true);
+    const url=await uploadPhoto(`tenant/${token}`,f);
+    setUploading(false);
+    if(url) setExtras(s=>[...s,{src:url,memo:""}]);
+  }
   return (
     <div style={{minHeight:"100vh",background:C.gray50,fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"}}>
       <div style={{background:C.primary,padding:"20px 16px 16px"}}>
@@ -1583,7 +1810,7 @@ function CheckinForm({co,prop,onSubmit}) {
         <SCard title="여기도 봐주세요 📸">
           <p style={{fontSize:F.base,color:C.gray800,marginBottom:4,fontWeight:500}}>입주할 때 이런 상태였어요.</p>
           <p style={{fontSize:F.sm,color:C.gray600,marginBottom:12}}>더 남겨두고 싶은 부분이 있다면 사진을 찍고 메모를 남겨주세요. 나중에 분쟁을 예방할 수 있어요.</p>
-          <input ref={extraRef} type="file" accept="image/*" style={{display:"none"}} onChange={e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>setExtras(s=>[...s,{src:ev.target.result,memo:""}]);r.readAsDataURL(f);}}/>
+          <input ref={extraRef} type="file" accept="image/*" style={{display:"none"}} onChange={addExtra}/>
           {extras.map((item,i)=>(
             <div key={i} style={{background:C.gray50,borderRadius:R.md,padding:"10px",marginBottom:8,display:"flex",gap:10,alignItems:"flex-start"}}>
               <img src={item.src} style={{width:72,height:96,objectFit:"cover",borderRadius:R.sm,flexShrink:0}}/>
@@ -1594,7 +1821,7 @@ function CheckinForm({co,prop,onSubmit}) {
             </div>
           ))}
           <Checkbox checked={noExtra} onChange={e=>{setNoExtra(e.target.checked);if(e.target.checked)setExtras([]);}} label="따로 남길 사진이 없어요"/>
-          {!noExtra && <GhostBtn label="📷 사진 추가하기" onClick={()=>extraRef.current?.click()}/>}
+          {!noExtra && <GhostBtn label={uploading?"업로드 중...":"📷 사진 추가하기"} onClick={()=>!uploading&&extraRef.current?.click()}/>}
         </SCard>
         <PrivacyNote>
           <p>· 남기신 사진과 메모는 퇴실할 때 방 상태를 비교하고 보증금 분쟁을 예방하는 목적으로만 임대인에게 보관돼요.</p>
@@ -1608,7 +1835,7 @@ function CheckinForm({co,prop,onSubmit}) {
 }
 
 // ── CHECKOUT FORM ─────────────────────────────────
-function CheckoutForm({co,prop,onSubmit}) {
+function CheckoutForm({co,prop,token,onSubmit}) {
   const [pw,setPw]=useState(""); const [pwErr,setPwErr]=useState(false);
   const [noDeposit,setNoDeposit]=useState(false);
   const [bank,setBank]=useState(""); const [acct,setAcct]=useState(""); const [acctName,setAcctName]=useState("");
@@ -1616,6 +1843,7 @@ function CheckoutForm({co,prop,onSubmit}) {
   const [photos,setPhotos]=useState({});
   const [utils,setUtils]=useState({전기:{skip:false,photo:null},가스:{skip:false,photo:null},수도:{skip:false,photo:null}});
   const [extras,setExtras]=useState([]); const [noExtra,setNoExtra]=useState(false);
+  const [uploading,setUploading]=useState(false);
   const fileRefs=useRef({}); const utilRefs=useRef({}); const extraRef=useRef(null);
   const pwRef=useRef(null); const acctRef=useRef(null); const photoSecRef=useRef(null); const utilSecRef=useRef(null);
   const [tried,setTried]=useState(false);
@@ -1623,8 +1851,27 @@ function CheckoutForm({co,prop,onSubmit}) {
   const missingPhotos=spaces.filter(sp=>refPhotos[sp]&&!photos[sp]);
   const missingUtil=["전기","가스","수도"].filter(k=>!utils[k]?.skip&&!utils[k]?.photo);
 
-  function hPhoto(sp,e){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>setPhotos(s=>({...s,[sp]:ev.target.result}));r.readAsDataURL(f);}
-  function hUtil(k,e){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>setUtils(s=>({...s,[k]:{...s[k],photo:ev.target.result}}));r.readAsDataURL(f);}
+  async function hPhoto(sp,e){
+    const f=e.target.files[0]; if(!f) return;
+    setUploading(true);
+    const url=await uploadPhoto(`tenant/${token}`,f);
+    setUploading(false);
+    if(url) setPhotos(s=>({...s,[sp]:url}));
+  }
+  async function hUtil(k,e){
+    const f=e.target.files[0]; if(!f) return;
+    setUploading(true);
+    const url=await uploadPhoto(`tenant/${token}`,f);
+    setUploading(false);
+    if(url) setUtils(s=>({...s,[k]:{...s[k],photo:url}}));
+  }
+  async function addExtra(e){
+    const f=e.target.files[0]; if(!f) return;
+    setUploading(true);
+    const url=await uploadPhoto(`tenant/${token}`,f);
+    setUploading(false);
+    if(url) setExtras(s=>[...s,{src:url,memo:""}]);
+  }
 
   function doSubmit() {
     if(!pw.trim()){
@@ -1730,7 +1977,7 @@ function CheckoutForm({co,prop,onSubmit}) {
         </div>
         <SCard title="여기도 봐주세요 📸">
           <p style={{fontSize:F.sm,color:C.gray600,marginBottom:12}}>추가로 남기고 싶은 부분이 있다면 사진을 올리고 메모를 남겨주세요.</p>
-          <input ref={extraRef} type="file" accept="image/*" style={{display:"none"}} onChange={e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>setExtras(s=>[...s,{src:ev.target.result,memo:""}]);r.readAsDataURL(f);}}/>
+          <input ref={extraRef} type="file" accept="image/*" style={{display:"none"}} onChange={addExtra}/>
           {extras.map((item,i)=>(
             <div key={i} style={{background:C.gray50,borderRadius:R.md,padding:"10px",marginBottom:8,display:"flex",gap:10,alignItems:"flex-start"}}>
               <img src={item.src} style={{width:72,height:96,objectFit:"cover",borderRadius:R.sm,flexShrink:0}}/>
@@ -1741,7 +1988,7 @@ function CheckoutForm({co,prop,onSubmit}) {
             </div>
           ))}
           <Checkbox checked={noExtra} onChange={e=>{setNoExtra(e.target.checked);if(e.target.checked)setExtras([]);}} label="따로 남길 사진이 없어요"/>
-          {!noExtra && <GhostBtn label="📷 사진 추가하기" onClick={()=>extraRef.current?.click()}/>}
+          {!noExtra && <GhostBtn label={uploading?"업로드 중...":"📷 사진 추가하기"} onClick={()=>!uploading&&extraRef.current?.click()}/>}
         </SCard>
         <PrivacyNote>
           <p>· 입력하신 반환 계좌(은행·계좌번호·예금주)와 사진은 보증금 정산과 방 상태 확인 목적으로만 임대인에게 전달돼요.</p>
