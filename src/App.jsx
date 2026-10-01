@@ -70,6 +70,7 @@ const contractFromDb = (r) => ({
   baseline:r.baseline, createdAt:r.created_at, endedAt:r.ended_at,
 });
 const dbErr = (label) => ({error})=>{ if(error) console.error(`[supabase] ${label}`, error); };
+const reviewFromDb = (r) => ({ id:r.id, userId:r.user_id, userName:r.user_name, stars:r.stars, text:r.text, featured:r.featured, time:r.created_at });
 
 // 사진 파일을 가로 1280px 안팎으로 줄여서 업로드 용량을 줄임
 function resizeImage(file, maxWidth=1280) {
@@ -468,9 +469,8 @@ export default function App() {
   const loadMyData = useCallback(async (uid) => {
     let { data: propRows } = await supabase.from("properties").select("*").eq("owner_id", uid).order("sort_order").order("created_at");
     if (!propRows || propRows.length === 0) {
-      const newProp = blankProperty(crypto.randomUUID(), uid, "방 1");
-      await supabase.from("properties").insert(propToDb(newProp)).then(dbErr("방 생성"));
-      await supabase.from("contracts").insert(contractToDb(blankContract(newProp.id))).then(dbErr("계약 생성"));
+      const { error } = await supabase.rpc("create_property_with_contract", { p_name: "방 1", p_sort_order: 0 });
+      if (error) console.error("[supabase] 첫 방 생성", error);
       ({ data: propRows } = await supabase.from("properties").select("*").eq("owner_id", uid).order("sort_order").order("created_at"));
     }
     const properties = (propRows || []).map(propFromDb);
@@ -481,6 +481,26 @@ export default function App() {
     const contracts = (conRows || []).map(contractFromDb);
     updateDb(s => ({ ...s, properties, contracts }));
   }, [updateDb]);
+
+  // ── 후기 불러오기 (관리자는 전체, 일반 임대인은 본인 것만) ──
+  const loadReviews = useCallback(async (u) => {
+    const q = u.isAdmin
+      ? supabase.from("reviews").select("*").order("created_at",{ascending:false})
+      : supabase.from("reviews").select("*").eq("user_id", u.id);
+    const { data } = await q;
+    updateDb(s => ({ ...s, reviews: (data||[]).map(reviewFromDb) }));
+  }, [updateDb]);
+
+  // 로그인 전(랜딩 페이지)에는 추천 후기만 공개로 보여줌
+  useEffect(() => {
+    if (user) return;
+    let active = true;
+    supabase.from("reviews").select("*").eq("featured", true).then(({data}) => {
+      if (!active) return;
+      updateDb(s => ({ ...s, reviews: (data||[]).map(reviewFromDb) }));
+    });
+    return () => { active = false; };
+  }, [user, updateDb]);
 
   // ── Supabase 로그인 상태 감지 ──
   useEffect(() => {
@@ -497,6 +517,7 @@ export default function App() {
       setUser(u);
       setDataLoading(true);
       await loadMyData(u.id);
+      loadReviews(u);
       if (!active) return;
       setDataLoading(false);
       setAuthLoading(false);
@@ -515,7 +536,7 @@ export default function App() {
       }
     });
     return () => { active = false; subscription.unsubscribe(); };
-  }, [loadMyData]);
+  }, [loadMyData, loadReviews]);
 
   // ── 임차인 링크(?token=...) — 로그인 없이 토큰으로만 계약 하나를 조회 ──
   useEffect(() => {
@@ -652,7 +673,10 @@ export default function App() {
     const prop=db.properties.find(p=>p.id===co?.propertyId);
     return <>
       {showReviewPopup && <ReviewModal
-        onSubmit={r=>{updateDb(s=>({...s,reviews:[...(s.reviews||[]).filter(x=>x.userId!==user.id),{...r,id:genId(),userId:user.id,userName:user.name,time:nowStr()}]}));}}
+        onSubmit={r=>{
+          updateDb(s=>({...s,reviews:[...(s.reviews||[]).filter(x=>x.userId!==user.id),{...r,id:crypto.randomUUID(),userId:user.id,userName:user.name,time:nowStr()}]}));
+          supabase.from("reviews").upsert({user_id:user.id,user_name:user.name,stars:r.stars,text:r.text},{onConflict:"user_id"}).then(dbErr("후기 저장"));
+        }}
         onClose={()=>{setShowReviewPopup(false);pop();}}
       />}
       <RecordPage co={co} prop={prop}
@@ -715,13 +739,10 @@ export default function App() {
           onOpenCheckout={(propId,coId)=>push("checkoutSetup",{propId,coId})}
           onViewRecord={coId=>push("record",{coId})}
           onOpenPast={propId=>push("pastReports",{propId})}
-          onAddProp={()=>{
-            const id=crypto.randomUUID();
-            const newProp=blankProperty(id,user.id,`방 ${myProps.length+1}`);
-            const newCo=blankContract(id);
-            updateDb(s=>({...s,properties:[...s.properties,newProp],contracts:[...s.contracts,newCo]}));
-            supabase.from("properties").insert({...propToDb(newProp),sort_order:myProps.length}).then(dbErr("방 추가"));
-            supabase.from("contracts").insert(contractToDb(newCo)).then(dbErr("계약 생성"));
+          onAddProp={async()=>{
+            const {error}=await supabase.rpc("create_property_with_contract",{p_name:`방 ${myProps.length+1}`,p_sort_order:myProps.length});
+            if(error){ console.error("[supabase] 방 추가", error); return; }
+            await loadMyData(user.id);
           }}
           showInstallBanner={showInstallBanner}
           onInstallClick={handleInstallClick}
@@ -730,7 +751,11 @@ export default function App() {
         {tab==="share" && <ShareTab/>}
         {tab==="settings" && <SettingsTab user={user} contactEmail={db.contactEmail} onLogout={async()=>{await supabase.auth.signOut();setUser(null);setStack([]);setTab("home");setShowLanding(false);}} onUpdateEmail={e=>upDb({contactEmail:e})}
           canInstallPwa={!isStandalone} onInstallClick={handleInstallClick}/>}
-        {tab==="admin" && user.isAdmin && <AdminTab db={db} onUserClick={u=>push("adminUser",{u})} onToggleReviewFeatured={id=>updateDb(s=>({...s,reviews:(s.reviews||[]).map(r=>r.id===id?{...r,featured:!r.featured}:r)}))}/>}
+        {tab==="admin" && user.isAdmin && <AdminTab db={db} onUserClick={u=>push("adminUser",{u})} onToggleReviewFeatured={id=>{
+          const row=db.reviews.find(r=>r.id===id);
+          updateDb(s=>({...s,reviews:(s.reviews||[]).map(r=>r.id===id?{...r,featured:!r.featured}:r)}));
+          supabase.from("reviews").update({featured:!row.featured}).eq("id",id).then(dbErr("후기 추천 설정"));
+        }}/>}
       </div>
       <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,background:C.white,borderTop:`1.5px solid ${C.gray200}`,zIndex:100,boxSizing:"border-box"}}>
         <div style={{display:"flex"}}>
@@ -1546,6 +1571,7 @@ function CheckinSetupPage({prop,co,onSaveProp,onSimCheckin,onMarkSent,onBack}) {
         <SCard title="📸 현재 방 상태 사진">
           <p style={{fontSize:F.sm,color:C.gray600,marginBottom:hadPhotos.current&&!co.checkinSubmitted?6:12}}>공간마다 지금 상태 사진을 올려두면 퇴실할 때 나란히 비교할 수 있어요</p>
           {hadPhotos.current&&!co.checkinSubmitted && <p style={{fontSize:F.xs,color:C.primaryText,background:C.primaryLight,borderRadius:R.sm,padding:"8px 10px",marginBottom:12,lineHeight:1.6}}>💡 이전에 올려 둔 사진이에요. 그대로 써도 되고, 바꿔도 돼요</p>}
+          {co.checkinSubmitted && <p style={{fontSize:F.xs,color:C.warningText,background:C.warningLight,borderRadius:R.sm,padding:"8px 10px",marginBottom:12,lineHeight:1.6}}>🔒 이미 임차인에게 전달돼서, 지금 사진을 바꿔도 이번 계약 기록은 그대로예요. 다음 입주자부터 반영돼요</p>}
           {spaces.map((sp,i)=>(
             <div key={i} style={{marginBottom:16}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
@@ -1566,9 +1592,10 @@ function CheckinSetupPage({prop,co,onSaveProp,onSimCheckin,onMarkSent,onBack}) {
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
                 <div>
                   <p style={{fontSize:F.xs,fontWeight:600,color:C.primary,marginBottom:4}}>지금 상태 (임대인)</p>
-                  <div onClick={()=>fileRefs.current[sp]?.click()} style={{aspectRatio:"3/4",background:C.primaryLight,borderRadius:R.md,border:`2px dashed ${C.primary}`,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",overflow:"hidden"}}>
+                  <div onClick={()=>fileRefs.current[sp]?.click()} style={{position:"relative",aspectRatio:"3/4",background:C.primaryLight,borderRadius:R.md,border:`2px dashed ${C.primary}`,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",overflow:"hidden"}}>
                     <input ref={el=>fileRefs.current[sp]=el} type="file" accept="image/*" style={{display:"none"}} onChange={e=>hPhoto(sp,e)}/>
                     {refPhotos[sp] ? <img src={refPhotos[sp]} style={{width:"100%",height:"100%",objectFit:"cover"}}/> : <span style={{fontSize:28}}>📷</span>}
+                    {refPhotos[sp] && <button onClick={e=>{e.stopPropagation();setRefPhotos(s=>{const n={...s};delete n[sp];return n;});}} style={{position:"absolute",top:4,right:4,width:22,height:22,borderRadius:"50%",background:"rgba(0,0,0,0.55)",color:C.white,border:"none",fontSize:13,lineHeight:1,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>}
                   </div>
                 </div>
                 <div>
@@ -1941,11 +1968,18 @@ function CheckoutForm({co,prop,token,onSubmit}) {
                 <div onClick={()=>fileRefs.current[sp]?.click()} style={{cursor:"pointer"}}>
                   <p style={{fontSize:F.xs,color:"#E74C3C",marginBottom:3}}>지금 상태 📷</p>
                   <input ref={el=>fileRefs.current[sp]=el} type="file" accept="image/*" style={{display:"none"}} onChange={e=>hPhoto(sp,e)}/>
-                  {photos[sp] ? <img src={photos[sp]} style={{width:"100%",aspectRatio:"3/4",objectFit:"cover",borderRadius:R.md,border:"2px solid #E74C3C"}}/>
-                    : <div style={{aspectRatio:"3/4",background:"#FFF5F5",borderRadius:R.md,border:"2px dashed #E74C3C",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:6}}>
-                      <span style={{fontSize:24}}>📷</span>
-                      <span style={{fontSize:F.xs,color:"#E74C3C",textAlign:"center",padding:"0 6px",lineHeight:1.4}}>터치해서 사진을 올려주세요</span>
-                    </div>}
+                  {photos[sp] ? (
+                    <div style={{position:"relative"}}>
+                      <img src={photos[sp]} style={{width:"100%",aspectRatio:"3/4",objectFit:"cover",borderRadius:R.md,border:"2px solid #E74C3C"}}/>
+                      <button onClick={e=>{e.stopPropagation();setPhotos(s=>{const n={...s};delete n[sp];return n;});}} style={{position:"absolute",top:4,right:4,width:22,height:22,borderRadius:"50%",background:"rgba(0,0,0,0.55)",color:C.white,border:"none",fontSize:13,lineHeight:1,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+                    </div>
+                  ) : (
+                    <div style={{position:"relative",aspectRatio:"3/4",background:"#FFF5F5",borderRadius:R.md,border:"2px dashed #E74C3C",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:6,overflow:"hidden"}}>
+                      {refPhotos[sp] && <img src={refPhotos[sp]} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",opacity:0.22}}/>}
+                      <span style={{fontSize:24,position:"relative"}}>📷</span>
+                      <span style={{fontSize:F.xs,color:"#E74C3C",textAlign:"center",padding:"0 6px",lineHeight:1.4,position:"relative"}}>{refPhotos[sp]?"옆 사진과 똑같이 찍어주세요":"터치해서 사진을 올려주세요"}</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -1967,7 +2001,8 @@ function CheckoutForm({co,prop,token,onSubmit}) {
                 {utils[k]?.photo ? (
                   <div style={{position:"relative"}}>
                     <img src={utils[k].photo} style={{width:"100%",aspectRatio:"3/4",objectFit:"cover",borderRadius:R.md}}/>
-                    <span style={{position:"absolute",top:6,right:6,background:C.success,color:C.white,borderRadius:R.full,fontSize:F.xs,padding:"3px 8px",fontWeight:600}}>✓</span>
+                    <span style={{position:"absolute",top:6,right:34,background:C.success,color:C.white,borderRadius:R.full,fontSize:F.xs,padding:"3px 8px",fontWeight:600}}>✓</span>
+                    <button onClick={()=>setUtils(s=>({...s,[k]:{...s[k],photo:null}}))} style={{position:"absolute",top:4,right:4,width:22,height:22,borderRadius:"50%",background:"rgba(0,0,0,0.55)",color:C.white,border:"none",fontSize:13,lineHeight:1,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
                   </div>
                 ) : <GhostBtn label="📷 사진 올리기" onClick={()=>utilRefs.current[k]?.click()}/>}
               </>}
